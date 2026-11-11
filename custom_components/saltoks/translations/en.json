@@ -88,6 +88,11 @@
       "eom_end_date": {
         "name": "Easy Office Mode end date"
       }
+    },
+    "button": {
+      "eom_remove": {
+        "name": "Remove Easy Office Mode schedule"
+      }
     }
   },
   "selector": {
@@ -133,6 +138,10 @@
           "description": "Last day of the schedule (included)."
         }
       }
+    },
+    "remove_easy_office_mode_schedule": {
+      "name": "Remove Easy Office Mode schedule",
+      "description": "Removes the Easy Office Mode schedule of one or more Salto KS locks. Locks without a schedule are skipped."
     }
   }
 }

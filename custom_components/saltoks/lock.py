@@ -21,6 +21,7 @@ from .entity import SaltoKSEntity
 PARALLEL_UPDATES = 0
 
 SERVICE_SET_EOM_SCHEDULE = "set_easy_office_mode_schedule"
+SERVICE_REMOVE_EOM_SCHEDULE = "remove_easy_office_mode_schedule"
 ATTR_AUTO_START = "auto_start"
 ATTR_DAYS = "days"
 SCHEDULE_FIELDS = (
@@ -72,6 +73,11 @@ async def async_setup_entry(
         SERVICE_SET_EOM_SCHEDULE,
         SET_EOM_SCHEDULE_SCHEMA,
         "async_set_easy_office_mode_schedule",
+    )
+    entity_platform.async_get_current_platform().async_register_entity_service(
+        SERVICE_REMOVE_EOM_SCHEDULE,
+        None,
+        "async_remove_easy_office_mode_schedule",
     )
 
 
@@ -152,4 +158,17 @@ class SaltoKSLock(SaltoKSEntity, LockEntity):
         except SaltoKSError as err:
             raise HomeAssistantError(
                 f"Could not update the Easy Office Mode schedule: {err}"
+            ) from err
+
+    async def async_remove_easy_office_mode_schedule(self) -> None:
+        """Service action: remove the schedule (no-op when there is none)."""
+        if eom.current_schedule(self.lock_data) is None:
+            return
+        try:
+            await self.coordinator.async_remove_eom_schedule(
+                self._site_id or "", self._lock_id or ""
+            )
+        except SaltoKSError as err:
+            raise HomeAssistantError(
+                f"Could not remove the Easy Office Mode schedule: {err}"
             ) from err

@@ -168,10 +168,27 @@ class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
 
             # Show the new schedule straight away, then read back what was stored.
             self._store_lock(site_id, lock_id, {**lock, eom.EOM_PROPERTY: payload})
+            await self._async_read_back(site_id, lock_id)
+
+    async def async_remove_eom_schedule(self, site_id: str, lock_id: str) -> None:
+        """Remove a lock's Easy Office Mode schedule (DELETE)."""
+        guard = self._eom_locks.setdefault((site_id, lock_id), asyncio.Lock())
+        async with guard:
+            lock = (self.data.locks.get(site_id, {}).get(lock_id) if self.data else None) or {}
             try:
-                fresh = await self.client.async_get_lock(site_id, lock_id)
-            except SaltoKSApiError as err:
-                _LOGGER.debug("Reading back lock %s failed: %s", lock_id, err)
-                return
-            if fresh:
-                self._store_lock(site_id, lock_id, fresh)
+                await self.client.async_delete_eom_schedule(site_id, lock_id)
+            except SaltoKSAuthError as err:
+                self.config_entry.async_start_reauth(self.hass)
+                raise SaltoKSApiError(str(err)) from err
+            # The API reports a lock without a schedule as an empty list.
+            self._store_lock(site_id, lock_id, {**lock, eom.EOM_PROPERTY: []})
+            await self._async_read_back(site_id, lock_id)
+
+    async def _async_read_back(self, site_id: str, lock_id: str) -> None:
+        try:
+            fresh = await self.client.async_get_lock(site_id, lock_id)
+        except SaltoKSApiError as err:
+            _LOGGER.debug("Reading back lock %s failed: %s", lock_id, err)
+            return
+        if fresh:
+            self._store_lock(site_id, lock_id, fresh)

@@ -248,6 +248,11 @@ class SaltoKSClient:
             json_body=schedule,
         )
 
+    async def async_delete_eom_schedule(self, site_id: str, lock_id: str) -> Any:
+        return await self._request(
+            "DELETE", f"/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule"
+        )
+
     async def async_set_locked_state(self, site_id: str, lock_id: str, state: str) -> Any:
         return await self._request(
             "PATCH",

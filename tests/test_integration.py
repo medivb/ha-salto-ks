@@ -477,6 +477,8 @@ async def _setup_eom(hass, aioclient_mock):
     for lock in EOM_LOCKS:
         aioclient_mock.put(
             f"{API_BASE_URL}/sites/s1/locks/{lock['id']}/easy_office_mode_schedule", json={})
+        aioclient_mock.delete(
+            f"{API_BASE_URL}/sites/s1/locks/{lock['id']}/easy_office_mode_schedule", json={})
         aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks/{lock['id']}", status=500)
     return entry
 
@@ -637,3 +639,39 @@ async def test_superseded_eom_sensors_removed(hass: HomeAssistant, aioclient_moc
     for reg in old:
         assert entreg.async_get(reg.entity_id) is None
     assert entreg.async_get(keep.entity_id) is not None
+
+
+
+def _deletes(aioclient_mock):
+    return [str(c[1]) for c in aioclient_mock.mock_calls if c[0] == "DELETE"]
+
+
+async def test_eom_remove_button(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = await _setup_eom(hass, aioclient_mock)
+    entreg = er.async_get(hass)
+    btn = _eid(hass, entry, "button", "l1", "remove")
+    lock_dev = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "lock_s1_l1")})
+    assert entreg.async_get(btn).device_id == lock_dev.id
+    assert hass.states.get(btn).attributes["friendly_name"] == "Front door Remove Easy Office Mode schedule"
+    # No schedule on l2: the button is unavailable.
+    assert hass.states.get(_eid(hass, entry, "button", "l2", "remove")).state == "unavailable"
+
+    await hass.services.async_call("button", "press", {"entity_id": btn}, blocking=True)
+    assert _deletes(aioclient_mock) == [
+        f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule"]
+    assert hass.states.get(_eid(hass, entry, "switch", "l1", "monday")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "time", "l1", "start_time")).state == "unknown"
+    assert hass.states.get(btn).state == "unavailable"
+
+
+async def test_eom_remove_service_multiple_locks(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = await _setup_eom(hass, aioclient_mock)
+    entreg = er.async_get(hass)
+    locks = [entreg.async_get_entity_id("lock", DOMAIN, f"{entry.entry_id}_lock_s1_{lid}")
+             for lid in ("l1", "l2")]
+    await hass.services.async_call(DOMAIN, "remove_easy_office_mode_schedule",
+                                   {"entity_id": locks}, blocking=True)
+    # l2 has no schedule and is skipped.
+    assert _deletes(aioclient_mock) == [
+        f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule"]
+    assert hass.states.get(_eid(hass, entry, "date", "l1", "end_date")).state == "unknown"
