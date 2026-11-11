@@ -37,20 +37,19 @@ Easy Office Mode is a schedule per lock: on the enabled weekdays between the sta
 
 Each lock device has these controls (configuration category):
 
-| Control | Type | API field |
-|---|---|---|
-| Easy Office Mode auto start | switch | `eom_auto_start` |
-| Easy Office Mode Monday … Sunday | switch | `monday` … `sunday` |
-| Easy Office Mode start time / end time | time | `start_time`, `end_time` |
-| Easy Office Mode start date / end date | date | `start_date`, `end_date` |
-| Remove Easy Office Mode schedule | button | `DELETE …/easy_office_mode_schedule` |
+| Control | Type |
+|---|---|
+| Easy Office Mode auto start | switch |
+| Easy Office Mode Monday … Sunday | switch |
+| Easy Office Mode start time / end time | time |
+| Easy Office Mode start date / end date | date |
+| Remove Easy Office Mode schedule | button |
 
-- Changing a control sends the complete schedule with `PUT /v1.2/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule` (the API replaces the whole schedule). Changes to the same lock are sent one at a time; afterwards the lock is read back so the controls show what was stored.
+- Changing a control sends the complete schedule. Changes to the same lock are sent one at a time; afterwards the lock is read back so the controls show what was stored.
 - Dates are sent as `YYYY-MM-DDT00:00:00.000` (start) and `YYYY-MM-DDT23:59:59.999` (end), so the last day is included.
 - The end time must be later than the start time, and the end date must not be before the start date; otherwise the change is refused with an error.
-- A lock without a schedule (the API returns an empty list) shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, and today as start and end date.
-- *Remove Easy Office Mode schedule* deletes the schedule with `DELETE /v1.2/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule`. The button is unavailable while the lock has no schedule. Home Assistant does not ask for confirmation when a button is pressed.
-- The schedule is not exposed as read-only metadata entities; such entities created by earlier versions are removed automatically.
+- A lock without a schedule shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, and today as start and end date.
+- *Remove Easy Office Mode schedule* deletes the schedule. The button is unavailable while the lock has no schedule. Home Assistant does not ask for confirmation when a button is pressed.
 
 ### Action: `saltoks.set_easy_office_mode_schedule`
 
@@ -103,7 +102,8 @@ Diagnostics (*Download diagnostics*) contain all raw API data, with credentials 
 ## Notifications
 
 In order to be notified when one of the locks changes state, a simple automation can be created: 
-~~~
+
+```yaml
 alias: {your automation name}
 description: ''
 triggers:
@@ -142,7 +142,8 @@ actions:
               message: Door is now unlocked
             action: notify.{notify target}
 mode: single
-~~~
+```
+
 ## Please note
 
 **Rate limits**: each poll makes 2 + (number of sites) requests (lock lists are fetched in parallel, up to 5 at a time). Increase the interval if Salto KS throttles the account.
