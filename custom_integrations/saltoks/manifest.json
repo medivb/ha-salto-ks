@@ -5,10 +5,10 @@
   "codeowners": ["@medivb"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/medivb/ha-saltoks",
+  "documentation": "https://github.com/medivb/ha-salto-ks",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/medivb/ha-saltoks/issues",
+  "issue_tracker": "https://github.com/medivb/ha-salto-ks/issues",
   "requirements": [],
   "version": "1.0.1"
 }
