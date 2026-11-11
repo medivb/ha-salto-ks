@@ -584,7 +584,7 @@ async def test_eom_first_change_without_schedule(hass: HomeAssistant, aioclient_
         "eom_auto_start": False, "monday": True, "tuesday": False, "wednesday": False,
         "thursday": False, "friday": False, "saturday": False, "sunday": False,
         "start_time": "09:00", "end_time": "17:00",
-        "start_date": "2026-11-11T00:00:00.000", "end_date": "2026-11-11T23:59:59.999",
+        "start_date": "2026-11-11T00:00:00.000", "end_date": "",
     }
 
 
@@ -609,6 +609,12 @@ async def test_eom_service_multiple_locks(hass: HomeAssistant, aioclient_mock, f
     assert l2["start_time"] == "07:30" and l2["end_time"] == "17:00"
     assert l2["start_date"] == "2026-11-11T00:00:00.000"
     assert l2["end_date"] == "2027-06-30T23:59:59.999"
+
+    # An empty end date removes it: the schedule runs indefinitely.
+    for empty in (None, ""):
+        await hass.services.async_call(DOMAIN, "set_easy_office_mode_schedule",
+                                       {"entity_id": locks[0], "end_date": empty}, blocking=True)
+        assert _puts(aioclient_mock, "l1")[-1]["end_date"] == ""
 
     # At least one schedule field is required.
     import voluptuous as vol
@@ -675,3 +681,26 @@ async def test_eom_remove_service_multiple_locks(hass: HomeAssistant, aioclient_
     assert _deletes(aioclient_mock) == [
         f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule"]
     assert hass.states.get(_eid(hass, entry, "date", "l1", "end_date")).state == "unknown"
+
+
+
+@pytest.mark.parametrize("returned", [None, ""])
+async def test_eom_indefinite_schedule(hass: HomeAssistant, aioclient_mock, returned) -> None:
+    """A schedule without end date (returned as null or empty) is shown and kept as indefinite."""
+    locks = [{**EOM_LOCKS[0], "easy_office_mode_schedule": {**EOM, "end_date": returned}}, EOM_LOCKS[1]]
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=locks)
+    entry = await _setup(hass)
+    aioclient_mock.put(f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule", json={})
+    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks/l1", status=500)
+
+    end = hass.states.get(_eid(hass, entry, "date", "l1", "end_date"))
+    assert end.state == "unknown"
+    assert end.attributes["no_end_date"] is True
+    assert hass.states.get(_eid(hass, entry, "date", "l2", "end_date")).attributes["no_end_date"] is False
+
+    # Changing another field keeps the schedule indefinite.
+    await hass.services.async_call("switch", "turn_on",
+                                   {"entity_id": _eid(hass, entry, "switch", "l1", "sunday")},
+                                   blocking=True)
+    assert _puts(aioclient_mock)[-1] == {**EOM, "sunday": True, "end_date": ""}

@@ -39,5 +39,13 @@ class SaltoKSEomDate(SaltoKSEomEntity, DateEntity):
     def native_value(self) -> date | None:
         return self.eom_value
 
+    @property
+    def extra_state_attributes(self) -> dict[str, bool] | None:
+        if self.field != eom.END_DATE:
+            return None
+        # Without an end date the schedule runs indefinitely (state: unknown).
+        has_schedule = eom.current_schedule(self.lock_data) is not None
+        return {"no_end_date": has_schedule and self.native_value is None}
+
     async def async_set_value(self, value: date) -> None:
         await self._async_apply(value)

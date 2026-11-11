@@ -135,7 +135,7 @@
         },
         "end_date": {
           "name": "End date",
-          "description": "Last day of the schedule (included)."
+          "description": "Last day of the schedule (included). Set it to an empty value (null) to remove the end date, so the schedule runs indefinitely. Leave the field out to keep the current end date."
         }
       }
     },
