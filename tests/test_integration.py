@@ -89,7 +89,11 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
     entreg = er.async_get(hass)
     lock_id = entreg.async_get_entity_id("lock", DOMAIN, f"{entry.entry_id}_lock_s1_l1")
     assert hass.states.get(lock_id).state == "locked"
-    assert entreg.async_get(lock_id).device_id == site.id
+    lock_dev = devreg.async_get_device(identifiers={(DOMAIN, "lock_s1_l1")})
+    assert lock_dev.name == "Front door"
+    assert lock_dev.via_device_id == site.id
+    assert entreg.async_get(lock_id).device_id == lock_dev.id
+    assert hass.states.get(lock_id).attributes["friendly_name"] == "Front door"
 
     image_id = entreg.async_get_entity_id("image", DOMAIN, f"{entry.entry_id}_profile_image")
     assert entreg.async_get(image_id).device_id == account.id
@@ -110,7 +114,8 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
     assert hass.states.get(tags).state == "2"
     assert hass.states.get(tags).attributes["items"] == ["a", "b"]
     online = entreg.async_get_entity_id("binary_sensor", DOMAIN, uid("lock_s1_l1__online"))
-    assert entreg.async_get(online).device_id == site.id
+    assert entreg.async_get(online).device_id == lock_dev.id
+    assert hass.states.get(online).attributes["friendly_name"] == "Front door Online"
 
 
 async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock) -> None:
@@ -446,3 +451,189 @@ async def test_poll_interval_and_timeout_defaults(hass: HomeAssistant, aioclient
 async def test_setup_form_fields(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert {str(k) for k in result["data_schema"].schema} == {"username", "password", "client_id"}
+
+
+
+# ------------------------------------------------------------ Easy Office Mode
+
+EOM = {
+    "eom_auto_start": True,
+    "monday": True, "tuesday": True, "wednesday": True, "thursday": True, "friday": True,
+    "saturday": False, "sunday": False,
+    "start_time": "10:00", "end_time": "17:00",
+    "start_date": "2026-03-30T00:00:00.000", "end_date": "2026-12-31T23:59:59.999",
+}
+EOM_LOCKS = [
+    {**LOCKS[0], "easy_office_mode_schedule": EOM},
+    {"id": "l2", "customer_reference": "Back door", "locked_state": "locked",
+     "easy_office_mode_schedule": []},
+]
+
+
+async def _setup_eom(hass, aioclient_mock):
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=EOM_LOCKS)
+    entry = await _setup(hass)
+    for lock in EOM_LOCKS:
+        aioclient_mock.put(
+            f"{API_BASE_URL}/sites/s1/locks/{lock['id']}/easy_office_mode_schedule", json={})
+        aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks/{lock['id']}", status=500)
+    return entry
+
+
+def _eid(hass, entry, platform, lock, field):
+    return er.async_get(hass).async_get_entity_id(
+        platform, DOMAIN, f"{entry.entry_id}_lock_s1_{lock}_eom_{field}")
+
+
+def _puts(aioclient_mock, lock="l1"):
+    return [c[2] for c in aioclient_mock.mock_calls
+            if c[0] == "PUT" and str(c[1]).endswith(f"/locks/{lock}/easy_office_mode_schedule")]
+
+
+async def test_eom_controls_reflect_schedule(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = await _setup_eom(hass, aioclient_mock)
+    entreg = er.async_get(hass)
+    lock_dev = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "lock_s1_l1")})
+
+    auto = _eid(hass, entry, "switch", "l1", "eom_auto_start")
+    assert hass.states.get(auto).state == "on"
+    assert hass.states.get(auto).attributes["friendly_name"] == "Front door Easy Office Mode auto start"
+    assert entreg.async_get(auto).device_id == lock_dev.id
+    assert entreg.async_get(auto).entity_category == "config"
+    assert hass.states.get(_eid(hass, entry, "switch", "l1", "monday")).state == "on"
+    assert hass.states.get(_eid(hass, entry, "switch", "l1", "sunday")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "time", "l1", "start_time")).state == "10:00:00"
+    assert hass.states.get(_eid(hass, entry, "time", "l1", "end_time")).state == "17:00:00"
+    assert hass.states.get(_eid(hass, entry, "date", "l1", "start_date")).state == "2026-03-30"
+    assert hass.states.get(_eid(hass, entry, "date", "l1", "end_date")).state == "2026-12-31"
+
+    # Lock without schedule (empty list): switches off, times and dates unknown.
+    assert hass.states.get(_eid(hass, entry, "switch", "l2", "eom_auto_start")).state == "off"
+    assert hass.states.get(_eid(hass, entry, "time", "l2", "start_time")).state == "unknown"
+    assert hass.states.get(_eid(hass, entry, "date", "l2", "end_date")).state == "unknown"
+
+    # The schedule is not exposed as read-only metadata.
+    for uid in ("lock_s1_l1__easy_office_mode_schedule.monday",
+                "lock_s1_l1__easy_office_mode_schedule.start_time",
+                "lock_s1_l2__easy_office_mode_schedule"):
+        for platform in ("sensor", "binary_sensor"):
+            assert entreg.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{uid}") is None
+
+
+async def test_eom_control_sends_full_schedule(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = await _setup_eom(hass, aioclient_mock)
+
+    await hass.services.async_call("switch", "turn_on",
+                                   {"entity_id": _eid(hass, entry, "switch", "l1", "saturday")},
+                                   blocking=True)
+    assert _puts(aioclient_mock)[-1] == {**EOM, "saturday": True}
+    assert hass.states.get(_eid(hass, entry, "switch", "l1", "saturday")).state == "on"
+
+    await hass.services.async_call("time", "set_value",
+                                   {"entity_id": _eid(hass, entry, "time", "l1", "start_time"),
+                                    "time": "08:30:00"}, blocking=True)
+    assert _puts(aioclient_mock)[-1] == {**EOM, "saturday": True, "start_time": "08:30"}
+
+    await hass.services.async_call("date", "set_value",
+                                   {"entity_id": _eid(hass, entry, "date", "l1", "end_date"),
+                                    "date": "2027-01-15"}, blocking=True)
+    body = _puts(aioclient_mock)[-1]
+    assert body["start_date"] == "2026-03-30T00:00:00.000"
+    assert body["end_date"] == "2027-01-15T23:59:59.999"
+
+
+async def test_eom_read_back_after_put(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = await _setup_eom(hass, aioclient_mock)
+    aioclient_mock.clear_requests()
+    stored = {**EOM, "start_time": "07:00"}  # what the API reports after the PUT
+    aioclient_mock.put(f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule", json={})
+    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks/l1",
+                       json={**EOM_LOCKS[0], "easy_office_mode_schedule": stored})
+    await hass.services.async_call("switch", "turn_off",
+                                   {"entity_id": _eid(hass, entry, "switch", "l1", "monday")},
+                                   blocking=True)
+    assert hass.states.get(_eid(hass, entry, "time", "l1", "start_time")).state == "07:00:00"
+
+
+async def test_eom_validation(hass: HomeAssistant, aioclient_mock) -> None:
+    from homeassistant.exceptions import ServiceValidationError
+
+    entry = await _setup_eom(hass, aioclient_mock)
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call("time", "set_value",
+                                       {"entity_id": _eid(hass, entry, "time", "l1", "end_time"),
+                                        "time": "09:00:00"}, blocking=True)
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call("date", "set_value",
+                                       {"entity_id": _eid(hass, entry, "date", "l1", "end_date"),
+                                        "date": "2026-01-01"}, blocking=True)
+    assert _puts(aioclient_mock) == []
+
+
+async def test_eom_first_change_without_schedule(hass: HomeAssistant, aioclient_mock,
+                                                  freezer) -> None:
+    freezer.move_to("2026-11-11 12:00:00+00:00")
+    entry = await _setup_eom(hass, aioclient_mock)
+    await hass.services.async_call("switch", "turn_on",
+                                   {"entity_id": _eid(hass, entry, "switch", "l2", "monday")},
+                                   blocking=True)
+    assert _puts(aioclient_mock, "l2")[-1] == {
+        "eom_auto_start": False, "monday": True, "tuesday": False, "wednesday": False,
+        "thursday": False, "friday": False, "saturday": False, "sunday": False,
+        "start_time": "09:00", "end_time": "17:00",
+        "start_date": "2026-11-11T00:00:00.000", "end_date": "2026-11-11T23:59:59.999",
+    }
+
+
+async def test_eom_service_multiple_locks(hass: HomeAssistant, aioclient_mock, freezer) -> None:
+    freezer.move_to("2026-11-11 12:00:00+00:00")
+    entry = await _setup_eom(hass, aioclient_mock)
+    entreg = er.async_get(hass)
+    locks = [entreg.async_get_entity_id("lock", DOMAIN, f"{entry.entry_id}_lock_s1_{lid}")
+             for lid in ("l1", "l2")]
+
+    await hass.services.async_call(DOMAIN, "set_easy_office_mode_schedule", {
+        "entity_id": locks,
+        "days": ["monday", "wednesday"],
+        "start_time": "07:30",
+        "end_date": "2027-06-30",
+    }, blocking=True)
+
+    l1, l2 = _puts(aioclient_mock, "l1")[-1], _puts(aioclient_mock, "l2")[-1]
+    assert l1 == {**EOM, "tuesday": False, "thursday": False, "friday": False,
+                  "start_time": "07:30", "end_date": "2027-06-30T23:59:59.999"}
+    assert l2["monday"] and l2["wednesday"] and not l2["tuesday"]
+    assert l2["start_time"] == "07:30" and l2["end_time"] == "17:00"
+    assert l2["start_date"] == "2026-11-11T00:00:00.000"
+    assert l2["end_date"] == "2027-06-30T23:59:59.999"
+
+    # At least one schedule field is required.
+    import voluptuous as vol
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "set_easy_office_mode_schedule",
+                                       {"entity_id": locks}, blocking=True)
+
+
+async def test_superseded_eom_sensors_removed(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            version=1, minor_version=3)
+    entry.add_to_hass(hass)
+    entreg = er.async_get(hass)
+    old = [
+        entreg.async_get_or_create(platform, DOMAIN, f"{entry.entry_id}_{uid}", config_entry=entry)
+        for platform, uid in (
+            ("binary_sensor", "lock_s1_l1__easy_office_mode_schedule.monday"),
+            ("sensor", "lock_s1_l1__easy_office_mode_schedule.start_time"),
+            ("sensor", "lock_s1_l2__easy_office_mode_schedule"),
+        )
+    ]
+    keep = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_lock_s1_l1__battery_level",
+                                      config_entry=entry)
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=EOM_LOCKS)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    for reg in old:
+        assert entreg.async_get(reg.entity_id) is None
+    assert entreg.async_get(keep.entity_id) is not None

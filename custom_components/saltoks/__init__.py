@@ -10,13 +10,23 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import SaltoKSClient
 from .const import CONF_CLIENT_ID, DOMAIN
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
-from .entity import account_name, is_id_field, is_image_field, site_name
+from .entity import (
+    account_name,
+    is_id_field,
+    is_image_field,
+    is_superseded_field,
+    lock_name,
+    site_name,
+)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
+    Platform.DATE,
     Platform.IMAGE,
     Platform.LOCK,
     Platform.SENSOR,
+    Platform.SWITCH,
+    Platform.TIME,
 ]
 
 
@@ -50,12 +60,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
         wanted = {entry.entry_id: account_name(coordinator.data.me)}
         for site_id, site in coordinator.data.sites.items():
             wanted[f"site_{site_id}"] = site_name(site, site_id)
+            for lock_id, lock in coordinator.data.locks.get(site_id, {}).items():
+                wanted[f"lock_{site_id}_{lock_id}"] = lock_name(lock, lock_id)
         for ident, name in wanted.items():
             device = dev_reg.async_get_device(identifiers={(DOMAIN, ident)})
             if device and device.name != name:
                 dev_reg.async_update_device(device.id, name=name)
 
-    _remove_image_url_sensors(hass, entry)
+    _remove_superseded_entities(hass, entry)
 
     entry.async_on_unload(coordinator.async_add_listener(_sync_device_names))
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
@@ -64,15 +76,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
     return True
 
 
-def _remove_image_url_sensors(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
-    """Remove sensors created for picture URL fields by earlier versions;
-    these fields are now image entities."""
+def _remove_superseded_entities(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
+    """Remove metadata entities created by earlier versions for fields that
+    are now exposed differently: picture URLs (now image entities) and the
+    Easy Office Mode schedule (now controls on the lock device)."""
     ent_reg = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
-        if reg_entry.domain != Platform.SENSOR or "__" not in reg_entry.unique_id:
+        if reg_entry.domain not in (Platform.SENSOR, Platform.BINARY_SENSOR):
             continue
-        path = tuple(reg_entry.unique_id.rsplit("__", 1)[1].split("."))
-        if is_image_field(path):
+        if "__" not in reg_entry.unique_id:
+            continue
+        owner, field = reg_entry.unique_id.rsplit("__", 1)
+        path = tuple(field.split("."))
+        superseded = (
+            reg_entry.domain == Platform.SENSOR and is_image_field(path)
+        ) or ("_lock_" in owner and is_superseded_field(path))
+        if superseded:
             ent_reg.async_remove(reg_entry.entity_id)
 
 
@@ -113,7 +132,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> 
 async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: SaltoKSConfigEntry, device: dr.DeviceEntry
 ) -> bool:
-    """Allow removing site devices that are no longer returned by the API."""
+    """Allow removing site and lock devices that are no longer returned by the API."""
     data = entry.runtime_data.data
     for domain, ident in device.identifiers:
         if domain != DOMAIN:
@@ -122,4 +141,8 @@ async def async_remove_config_entry_device(
             return False
         if ident.startswith("site_") and ident.removeprefix("site_") in data.sites:
             return False
+        if ident.startswith("lock_"):
+            site_id, _, lock_id = ident.removeprefix("lock_").partition("_")
+            if lock_id in data.locks.get(site_id, {}):
+                return False
     return True

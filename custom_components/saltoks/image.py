@@ -20,13 +20,11 @@ from homeassistant.util import dt as dt_util
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
 from .entity import (
     KIND_IMAGE,
-    SCOPE_LOCK,
     SCOPE_ME,
     MetadataKey,
     SaltoKSEntity,
     SaltoKSMetadataEntity,
     humanize,
-    lock_name,
     setup_metadata_platform,
 )
 
@@ -163,8 +161,6 @@ class SaltoKSMetadataImage(_UrlImageMixin, SaltoKSMetadataEntity, ImageEntity):
     def name(self) -> str:
         parent = self.key.path[:-1]
         label = f"{humanize(parent)} picture" if parent else "Picture"
-        if self.key.scope == SCOPE_LOCK:
-            return f"{lock_name(self.lock_data, self.key.lock_id or '')} {label.lower()}"
         return label
 
     @property

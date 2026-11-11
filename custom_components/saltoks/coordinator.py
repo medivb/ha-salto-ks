@@ -15,7 +15,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import SaltoKSApiError, SaltoKSAuthError, SaltoKSClient
-from . import const
+from . import const, eom
 from .const import (
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -60,6 +60,7 @@ class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
         # Metadata keys already claimed by an entity (shared across platforms).
         self.claimed_metadata: set[str] = set()
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        self._eom_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     async def _fetch_locks(self, site_id: str) -> list[dict[str, Any]]:
         async with self._semaphore:
@@ -145,3 +146,32 @@ class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
             lock_id, state, const.LOCK_CONFIRM_TIMEOUT,
         )
         return False
+
+    async def async_set_eom_schedule(
+        self, site_id: str, lock_id: str, changes: dict[str, Any]
+    ) -> None:
+        """Apply changes to a lock's Easy Office Mode schedule.
+
+        The PUT replaces the whole schedule, so the request is built from the
+        current schedule plus the changes. Changes per lock are serialised so
+        quick successive edits cannot overwrite each other.
+        """
+        guard = self._eom_locks.setdefault((site_id, lock_id), asyncio.Lock())
+        async with guard:
+            lock = (self.data.locks.get(site_id, {}).get(lock_id) if self.data else None) or {}
+            payload = eom.build_payload(eom.current_schedule(lock), changes)
+            try:
+                await self.client.async_set_eom_schedule(site_id, lock_id, payload)
+            except SaltoKSAuthError as err:
+                self.config_entry.async_start_reauth(self.hass)
+                raise SaltoKSApiError(str(err)) from err
+
+            # Show the new schedule straight away, then read back what was stored.
+            self._store_lock(site_id, lock_id, {**lock, eom.EOM_PROPERTY: payload})
+            try:
+                fresh = await self.client.async_get_lock(site_id, lock_id)
+            except SaltoKSApiError as err:
+                _LOGGER.debug("Reading back lock %s failed: %s", lock_id, err)
+                return
+            if fresh:
+                self._store_lock(site_id, lock_id, fresh)

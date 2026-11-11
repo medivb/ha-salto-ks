@@ -8,10 +8,13 @@ from typing import Any
 
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER, MAX_FLATTEN_DEPTH
+from . import eom
+from .api import SaltoKSError
 from .coordinator import SaltoKSCoordinator, SaltoKSData
 
 SCOPE_ME = "me"
@@ -30,6 +33,14 @@ IMAGE_FIELDS = frozenset(
 
 def is_image_field(path: tuple[str, ...]) -> bool:
     return bool(path) and path[-1].lower() in IMAGE_FIELDS
+
+
+# Lock fields exposed as controls instead of read-only metadata entities.
+SUPERSEDED_LOCK_FIELDS = frozenset({"easy_office_mode_schedule"})
+
+
+def is_superseded_field(path: tuple[str, ...]) -> bool:
+    return bool(path) and path[0] in SUPERSEDED_LOCK_FIELDS
 
 
 def is_id_field(path: tuple[str, ...]) -> bool:
@@ -94,11 +105,22 @@ def site_device_info(coordinator: SaltoKSCoordinator, site_id: str) -> DeviceInf
     )
 
 
+def lock_device_info(coordinator: SaltoKSCoordinator, site_id: str, lock_id: str) -> DeviceInfo:
+    lock = coordinator.data.locks.get(site_id, {}).get(lock_id) if coordinator.data else None
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"lock_{site_id}_{lock_id}")},
+        name=lock_name(lock, lock_id),
+        manufacturer=MANUFACTURER,
+        model="Salto KS lock",
+        via_device=(DOMAIN, f"site_{site_id}"),
+    )
+
+
 # ------------------------------------------------------------- base class
 
 
 class SaltoKSEntity(CoordinatorEntity[SaltoKSCoordinator]):
-    """Base entity bound to the account device or a site device."""
+    """Base entity bound to the account, a site or a lock device."""
 
     _attr_has_entity_name = True
 
@@ -111,11 +133,12 @@ class SaltoKSEntity(CoordinatorEntity[SaltoKSCoordinator]):
         super().__init__(coordinator)
         self._site_id = site_id
         self._lock_id = lock_id
-        self._attr_device_info = (
-            site_device_info(coordinator, site_id)
-            if site_id is not None
-            else account_device_info(coordinator)
-        )
+        if site_id is not None and lock_id is not None:
+            self._attr_device_info = lock_device_info(coordinator, site_id, lock_id)
+        elif site_id is not None:
+            self._attr_device_info = site_device_info(coordinator, site_id)
+        else:
+            self._attr_device_info = account_device_info(coordinator)
 
     @property
     def site(self) -> dict[str, Any] | None:
@@ -208,6 +231,8 @@ def iter_metadata(data: SaltoKSData) -> Iterator[tuple[MetadataKey, str]]:
             yield MetadataKey(SCOPE_SITE, path, site_id), _kind(path, value)
         for lock_id, lock in data.locks.get(site_id, {}).items():
             for path, value in flatten(lock):
+                if is_superseded_field(path):
+                    continue
                 yield MetadataKey(SCOPE_LOCK, path, site_id, lock_id), _kind(path, value)
 
 
@@ -227,10 +252,7 @@ class SaltoKSMetadataEntity(SaltoKSEntity):
 
     @property
     def name(self) -> str:
-        field_name = humanize(self.key.path)
-        if self.key.scope == SCOPE_LOCK:
-            return f"{lock_name(self.lock_data, self.key.lock_id or '')} {field_name.lower()}"
-        return field_name
+        return humanize(self.key.path)
 
     @property
     def raw_value(self) -> tuple[bool, Any]:
@@ -265,3 +287,60 @@ def setup_metadata_platform(
 
     _discover()
     return coordinator.async_add_listener(_discover)
+
+
+# --------------------------------------------------------- per-lock controls
+
+
+def setup_per_lock_platform(
+    coordinator: SaltoKSCoordinator,
+    build: Callable[[SaltoKSCoordinator, str, str], list[Entity]],
+    async_add_entities: Callable[[list[Entity]], None],
+) -> Callable[[], None]:
+    """Create entities for every lock now and for locks that appear later."""
+    known: set[tuple[str, str]] = set()
+
+    def _discover() -> None:
+        if not coordinator.data:
+            return
+        new: list[Entity] = []
+        for site_id, locks in coordinator.data.locks.items():
+            for lock_id in locks:
+                if (site_id, lock_id) not in known:
+                    known.add((site_id, lock_id))
+                    new.extend(build(coordinator, site_id, lock_id))
+        if new:
+            async_add_entities(new)
+
+    _discover()
+    return coordinator.async_add_listener(_discover)
+
+
+class SaltoKSEomEntity(SaltoKSEntity):
+    """One field of a lock's Easy Office Mode schedule."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self, coordinator: SaltoKSCoordinator, site_id: str, lock_id: str, field: str
+    ) -> None:
+        super().__init__(coordinator, site_id, lock_id)
+        self.field = field
+        self._attr_translation_key = f"eom_{field.removeprefix('eom_')}"
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_lock_{site_id}_{lock_id}_eom_{field}"
+        )
+
+    @property
+    def eom_value(self) -> Any:
+        return eom.to_values(eom.current_schedule(self.lock_data))[self.field]
+
+    async def _async_apply(self, value: Any) -> None:
+        try:
+            await self.coordinator.async_set_eom_schedule(
+                self._site_id or "", self._lock_id or "", {self.field: value}
+            )
+        except SaltoKSError as err:
+            raise HomeAssistantError(
+                f"Could not update the Easy Office Mode schedule: {err}"
+            ) from err
