@@ -104,43 +104,43 @@ Diagnostics (*Download diagnostics*) contain all raw API data, with credentials 
 In order to be notified when one of the locks changes state, a simple automation can be created: 
 
 ```yaml
-alias: {your automation name}
+alias: Lock notifier
 description: ''
 triggers:
   - trigger: state
     entity_id:
-      - lock.{lock name}
+      - lock.front_door
     to:
       - locked
       - unlocked
     from:
-      - unlocking
       - locking
+      - unlocking
 conditions: []
 actions:
   - choose:
       - conditions:
           - condition: state
-            entity_id: lock.{lock name}
+            entity_id: lock.front_door
             state:
               - locked
         sequence:
           - metadata: {}
             data:
               title: State of Salto KS lock changed
-              message: Door is now locked
-            action: notify.{notify target}
+              message: Front door is now locked
+            action: notify.my_mobile
       - conditions:
           - condition: state
-            entity_id: lock.{lock name}
+            entity_id: lock.front_door
             state:
               - unlocked
         sequence:
           - metadata: {}
             data:
               title: State of Salto KS lock changed
-              message: Door is now unlocked
-            action: notify.{notify target}
+              message: Front door is now unlocked
+            action: notify.my_mobile
 mode: single
 ```
 
