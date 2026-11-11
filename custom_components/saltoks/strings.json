@@ -46,6 +46,102 @@
       "profile_image": {
         "name": "Profile image"
       }
+    },
+    "switch": {
+      "eom_auto_start": {
+        "name": "Easy Office Mode auto start"
+      },
+      "eom_monday": {
+        "name": "Easy Office Mode Monday"
+      },
+      "eom_tuesday": {
+        "name": "Easy Office Mode Tuesday"
+      },
+      "eom_wednesday": {
+        "name": "Easy Office Mode Wednesday"
+      },
+      "eom_thursday": {
+        "name": "Easy Office Mode Thursday"
+      },
+      "eom_friday": {
+        "name": "Easy Office Mode Friday"
+      },
+      "eom_saturday": {
+        "name": "Easy Office Mode Saturday"
+      },
+      "eom_sunday": {
+        "name": "Easy Office Mode Sunday"
+      }
+    },
+    "time": {
+      "eom_start_time": {
+        "name": "Easy Office Mode start time"
+      },
+      "eom_end_time": {
+        "name": "Easy Office Mode end time"
+      }
+    },
+    "date": {
+      "eom_start_date": {
+        "name": "Easy Office Mode start date"
+      },
+      "eom_end_date": {
+        "name": "Easy Office Mode end date"
+      }
+    },
+    "button": {
+      "eom_remove": {
+        "name": "Remove Easy Office Mode schedule"
+      }
+    }
+  },
+  "selector": {
+    "weekday": {
+      "options": {
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday",
+        "sunday": "Sunday"
+      }
+    }
+  },
+  "services": {
+    "set_easy_office_mode_schedule": {
+      "name": "Set Easy Office Mode schedule",
+      "description": "Changes the Easy Office Mode schedule of one or more Salto KS locks in a single request per lock. Fields that are left out keep their current value.",
+      "fields": {
+        "auto_start": {
+          "name": "Auto start",
+          "description": "Unlock the lock automatically when the window starts."
+        },
+        "days": {
+          "name": "Days",
+          "description": "Weekdays on which the schedule applies. Days that are not selected are disabled."
+        },
+        "start_time": {
+          "name": "Start time",
+          "description": "Start of the daily window (local time)."
+        },
+        "end_time": {
+          "name": "End time",
+          "description": "End of the daily window (local time); the lock is locked automatically at this time."
+        },
+        "start_date": {
+          "name": "Start date",
+          "description": "First day of the schedule."
+        },
+        "end_date": {
+          "name": "End date",
+          "description": "Last day of the schedule (included)."
+        }
+      }
+    },
+    "remove_easy_office_mode_schedule": {
+      "name": "Remove Easy Office Mode schedule",
+      "description": "Removes the Easy Office Mode schedule of one or more Salto KS locks. Locks without a schedule are skipped."
     }
   }
 }

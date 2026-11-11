@@ -27,6 +27,62 @@ After a lock or unlock request, the integration tries to refresh the state of th
 
 State: `locked_state == "locked"` → *locked*; any other value → *unlocked*; missing → *unknown*. The raw value is available as the `locked_state` attribute.
 
+## Devices
+
+Account (main device) → one device per site (named after `customer_reference`) → one device per lock (named after the lock's `customer_reference`). Each lock device holds the lock entity, the Easy Office Mode controls and the lock's metadata entities.
+
+## Easy Office Mode
+
+Easy Office Mode is a schedule per lock: on the enabled weekdays between the start and end date, the lock may stay unlocked during the daily window and is locked automatically by the gateway at the end time. With *auto start* enabled, the lock is also unlocked automatically when the window starts. Times and dates are local time.
+
+Each lock device has these controls (configuration category):
+
+| Control | Type | API field |
+|---|---|---|
+| Easy Office Mode auto start | switch | `eom_auto_start` |
+| Easy Office Mode Monday … Sunday | switch | `monday` … `sunday` |
+| Easy Office Mode start time / end time | time | `start_time`, `end_time` |
+| Easy Office Mode start date / end date | date | `start_date`, `end_date` |
+| Remove Easy Office Mode schedule | button | `DELETE …/easy_office_mode_schedule` |
+
+- Changing a control sends the complete schedule with `PUT /v1.2/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule` (the API replaces the whole schedule). Changes to the same lock are sent one at a time; afterwards the lock is read back so the controls show what was stored.
+- Dates are sent as `YYYY-MM-DDT00:00:00.000` (start) and `YYYY-MM-DDT23:59:59.999` (end), so the last day is included.
+- The end time must be later than the start time, and the end date must not be before the start date; otherwise the change is refused with an error.
+- A lock without a schedule (the API returns an empty list) shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, and today as start and end date.
+- *Remove Easy Office Mode schedule* deletes the schedule with `DELETE /v1.2/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule`. The button is unavailable while the lock has no schedule. Home Assistant does not ask for confirmation when a button is pressed.
+- The schedule is not exposed as read-only metadata entities; such entities created by earlier versions are removed automatically.
+
+### Action: `saltoks.set_easy_office_mode_schedule`
+
+Changes several fields at once, for one or more locks (target lock entities, devices or areas). Fields that are left out keep their current value; at least one field is required. `days` lists the enabled weekdays, days not listed are disabled.
+
+```yaml
+action: saltoks.set_easy_office_mode_schedule
+target:
+  entity_id:
+    - lock.front_door
+    - lock.back_door
+data:
+  auto_start: true
+  days: [monday, tuesday, wednesday, thursday, friday]
+  start_time: "08:00"
+  end_time: "17:30"
+  start_date: "2026-01-01"
+  end_date: "2026-12-31"
+```
+
+### Action: `saltoks.remove_easy_office_mode_schedule`
+
+Removes the schedule of one or more locks. Locks without a schedule are skipped.
+
+```yaml
+action: saltoks.remove_easy_office_mode_schedule
+target:
+  entity_id:
+    - lock.front_door
+    - lock.back_door
+```
+
 ## Metadata entities (auto-discovered)
 
 Every field returned by Salto KS becomes an entity (diagnostic category):

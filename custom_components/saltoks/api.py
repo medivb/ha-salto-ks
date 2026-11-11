@@ -239,6 +239,20 @@ class SaltoKSClient:
                     return data[key]
         return data if isinstance(data, dict) else {}
 
+    async def async_set_eom_schedule(
+        self, site_id: str, lock_id: str, schedule: dict[str, Any]
+    ) -> Any:
+        return await self._request(
+            "PUT",
+            f"/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule",
+            json_body=schedule,
+        )
+
+    async def async_delete_eom_schedule(self, site_id: str, lock_id: str) -> Any:
+        return await self._request(
+            "DELETE", f"/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule"
+        )
+
     async def async_set_locked_state(self, site_id: str, lock_id: str, state: str) -> Any:
         return await self._request(
             "PATCH",
