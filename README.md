@@ -6,7 +6,7 @@ The locks are controlled via a feature in Salto KS called "remote opening". The 
 
 ## Installation
 
-1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-saltoks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
+1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-salto-ks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Salto KS*.
 4. Enter username, password and client ID.
