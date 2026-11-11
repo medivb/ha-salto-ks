@@ -1,0 +1,51 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Salto KS",
+        "description": "Sign in with your Salto KS account. The client ID is sent exactly as entered (`Authorization: Basic <client ID>`).\n\nLast server response: {server_message}",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "client_id": "Client ID"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Salto KS",
+        "description": "The stored credentials were rejected. Please enter them again.\n\nLast server response: {server_message}",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Username or password rejected (invalid_grant). See the server response below.",
+      "invalid_client": "Client ID rejected (invalid_client). See the server response below.",
+      "unauthorized_client": "This client is not allowed to use the password grant (unauthorized_client).",
+      "cannot_connect": "Unable to reach the Salto KS services. See the server response below.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Salto KS options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "image": {
+      "profile_image": {
+        "name": "Profile image"
+      }
+    }
+  }
+}
