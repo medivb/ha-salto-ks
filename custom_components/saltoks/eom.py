@@ -78,22 +78,25 @@ def build_payload(schedule: dict[str, Any] | None, changes: dict[str, Any]) -> d
     """Merge typed changes into the current schedule and return the PUT body.
 
     Fields without a value (no schedule yet) get safe defaults: weekdays and
-    auto start off, 09:00-17:00, and today as start and end date. With all
-    days off the schedule has no effect until a day is enabled.
+    auto start off, 09:00-17:00, today as start date and no end date. With
+    all days off the schedule has no effect until a day is enabled.
+
+    An end date of None means the schedule runs indefinitely; it is sent as
+    an empty string.
     """
     values = {**to_values(schedule), **changes}
     today = dt_util.now().date()
     start_time = values[START_TIME] or DEFAULT_START_TIME
     end_time = values[END_TIME] or DEFAULT_END_TIME
     start_date = values[START_DATE] or today
-    end_date = values[END_DATE] or max(start_date, today)
+    end_date = values[END_DATE]  # None: no end date (indefinite)
 
     if end_time <= start_time:
         raise ServiceValidationError(
             f"The end time ({end_time:%H:%M}) must be later than the start time "
             f"({start_time:%H:%M})."
         )
-    if end_date < start_date:
+    if end_date is not None and end_date < start_date:
         raise ServiceValidationError(
             f"The end date ({end_date.isoformat()}) must not be before the start date "
             f"({start_date.isoformat()})."
@@ -105,5 +108,5 @@ def build_payload(schedule: dict[str, Any] | None, changes: dict[str, Any]) -> d
     payload[START_TIME] = start_time.strftime("%H:%M")
     payload[END_TIME] = end_time.strftime("%H:%M")
     payload[START_DATE] = start_date.isoformat() + START_OF_DAY
-    payload[END_DATE] = end_date.isoformat() + END_OF_DAY
+    payload[END_DATE] = end_date.isoformat() + END_OF_DAY if end_date else ""
     return payload

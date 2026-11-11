@@ -47,13 +47,14 @@ Each lock device has these controls (configuration category):
 
 - Changing a control sends the complete schedule. Changes to the same lock are sent one at a time; afterwards the lock is read back so the controls show what was stored.
 - Dates are sent as `YYYY-MM-DDT00:00:00.000` (start) and `YYYY-MM-DDT23:59:59.999` (end), so the last day is included.
+- The end date is optional. Without an end date (sent as an empty string) the schedule runs indefinitely; the end date control then shows *unknown* and has the attribute `no_end_date: true`. To remove an end date, use the action below with `end_date: null`.
 - The end time must be later than the start time, and the end date must not be before the start date; otherwise the change is refused with an error.
-- A lock without a schedule shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, and today as start and end date.
+- A lock without a schedule shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, today as start date and no end date (indefinite).
 - *Remove Easy Office Mode schedule* deletes the schedule. The button is unavailable while the lock has no schedule. Home Assistant does not ask for confirmation when a button is pressed.
 
 ### Action: `saltoks.set_easy_office_mode_schedule`
 
-Changes several fields at once, for one or more locks (target lock entities, devices or areas). Fields that are left out keep their current value; at least one field is required. `days` lists the enabled weekdays, days not listed are disabled.
+Changes several fields at once, for one or more locks (target lock entities, devices or areas). Fields that are left out keep their current value; at least one field is required. `end_date: null` (or an empty value) removes the end date, so the schedule runs indefinitely. `days` lists the enabled weekdays, days not listed are disabled.
 
 ```yaml
 action: saltoks.set_easy_office_mode_schedule

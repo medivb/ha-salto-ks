@@ -40,7 +40,8 @@ SET_EOM_SCHEDULE_SCHEMA = vol.All(
             vol.Optional(eom.START_TIME): cv.time,
             vol.Optional(eom.END_TIME): cv.time,
             vol.Optional(eom.START_DATE): cv.date,
-            vol.Optional(eom.END_DATE): cv.date,
+            # Empty or null removes the end date (the schedule runs indefinitely).
+            vol.Optional(eom.END_DATE): vol.Any(None, vol.All(str, vol.Length(max=0)), cv.date),
         }
     ),
     cv.has_at_least_one_key(*SCHEDULE_FIELDS),
@@ -148,9 +149,10 @@ class SaltoKSLock(SaltoKSEntity, LockEntity):
         for field in (eom.START_TIME, eom.END_TIME):
             if field in kwargs:
                 changes[field] = kwargs[field].replace(second=0, microsecond=0)
-        for field in (eom.START_DATE, eom.END_DATE):
-            if field in kwargs:
-                changes[field] = kwargs[field]
+        if eom.START_DATE in kwargs:
+            changes[eom.START_DATE] = kwargs[eom.START_DATE]
+        if eom.END_DATE in kwargs:
+            changes[eom.END_DATE] = kwargs[eom.END_DATE] or None
         try:
             await self.coordinator.async_set_eom_schedule(
                 self._site_id or "", self._lock_id or "", changes
