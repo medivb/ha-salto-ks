@@ -53,10 +53,14 @@ def _token(aioclient_mock, status=200, access="tok1"):
     aioclient_mock.post(TOKEN_URL, status=status, json=body)
 
 
-def _api(aioclient_mock, locks=None, me=None):
+ENTRIES_URL = "https://connect.saltoks.com/v1.1/sites/s1/entries"
+
+
+def _api(aioclient_mock, locks=None, me=None, entries=None):
     aioclient_mock.get(f"{API_BASE_URL}/me", json=me or ME)
     aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
     aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=locks or LOCKS)
+    aioclient_mock.get(ENTRIES_URL, json={"items": entries or [], "continuation_token": None})
 
 
 async def _setup(hass: HomeAssistant) -> MockConfigEntry:
@@ -704,3 +708,142 @@ async def test_eom_indefinite_schedule(hass: HomeAssistant, aioclient_mock, retu
                                    {"entity_id": _eid(hass, entry, "switch", "l1", "sunday")},
                                    blocking=True)
     assert _puts(aioclient_mock)[-1] == {**EOM, "sunday": True, "end_date": ""}
+
+
+
+# ------------------------------------------------------------------- entries
+
+def _entry(entry_id, when, lock="l1", category="Opening", **extra):
+    return {
+        "id": entry_id, "event_category": category, "event_detail": "Key",
+        "utc_date_time": when, "local_date_time": when, "lock_id": lock,
+        "lock_customer_reference": "Front door",
+        "user_id": "u9", "user_first_name": "Jane", "user_last_name": "Doe",
+        "user_alias": "jd", "user_image_url": "https://img.example.com/u9.png",
+        "access_by": "Mobile", "access_detail": "App", **extra,
+    }
+
+
+async def _poll(hass, aioclient_mock, entries, locks=None):
+    aioclient_mock.clear_requests()
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=locks, entries=entries)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+def _event_id(hass, entry, lock="l1"):
+    return er.async_get(hass).async_get_entity_id(
+        "event", DOMAIN, f"{entry.entry_id}_lock_s1_{lock}_last_entry")
+
+
+async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) -> None:
+    from homeassistant.core import callback
+
+    old = _entry("e1", "2026-11-11T08:00:00.000")
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=EOM_LOCKS, entries=[old])
+    entry = await _setup(hass)
+
+    # Request: newest entries of the site, newest first.
+    call = next(c for c in aioclient_mock.mock_calls if "/entries" in str(c[1]))
+    assert call[1].query["$orderby"] == "utc_date_time desc"
+    assert call[1].query["$top"] == "50"
+
+    ev = _event_id(hass, entry)
+    lock_dev = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "lock_s1_l1")})
+    assert er.async_get(hass).async_get(ev).device_id == lock_dev.id
+    state = hass.states.get(ev)
+    assert state.attributes["friendly_name"] == "Front door Last entry"
+    # Fresh install: the most recent entry is shown; user details are left out by default.
+    assert state.attributes["event_type"] == "opening"
+    assert state.attributes["id"] == "e1"
+    assert "user_first_name" not in state.attributes and "user_id" not in state.attributes
+    assert state.attributes["access_by"] == "Mobile"
+    # Lock without entries.
+    assert hass.states.get(_event_id(hass, entry, "l2")).state == "unknown"
+
+    fired: list[tuple[str, str]] = []
+
+    @callback
+    def _record(event):
+        if event.data["entity_id"] in (ev, _event_id(hass, entry, "l2")):
+            new = event.data["new_state"]
+            fired.append((event.data["entity_id"], new.attributes.get("id")))
+
+    hass.bus.async_listen("state_changed", _record)
+
+    # Next poll: two new entries for l1 (returned newest first) and one for l2.
+    freezer.tick(11)
+    await _poll(hass, aioclient_mock, [
+        _entry("e3", "2026-11-11T09:05:00.000", category="Denied access"),
+        _entry("e4", "2026-11-11T09:01:00.000", lock="l2"),
+        _entry("e2", "2026-11-11T09:00:00.000"),
+        old,
+    ], locks=EOM_LOCKS)
+    l1 = [i for e, i in fired if e == ev]
+    assert l1 == ["e2", "e3"]  # oldest first, each once
+    assert [i for e, i in fired if e != ev] == ["e4"]
+    state = hass.states.get(ev)
+    assert state.attributes["event_type"] == "denied_access"
+    assert set(state.attributes["event_types"]) >= {"opening", "denied_access"}
+
+    # The same entries are not reported again, also not on other updates.
+    fired.clear()
+    entry.runtime_data.async_update_listeners()
+    freezer.tick(11)
+    await _poll(hass, aioclient_mock, [_entry("e3", "2026-11-11T09:05:00.000")], locks=EOM_LOCKS)
+    assert fired == []
+
+
+async def test_entries_with_user_details(hass: HomeAssistant, aioclient_mock) -> None:
+    _token(aioclient_mock)
+    _api(aioclient_mock, entries=[_entry("e1", "2026-11-11T08:00:00.000")])
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            options={"include_user_details": True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    attrs = hass.states.get(_event_id(hass, entry)).attributes
+    assert attrs["user_first_name"] == "Jane" and attrs["user_id"] == "u9"
+
+
+async def test_entries_failure_does_not_fail_update(hass: HomeAssistant, aioclient_mock) -> None:
+    _token(aioclient_mock)
+    aioclient_mock.get(f"{API_BASE_URL}/me", json=ME)
+    aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
+    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=LOCKS)
+    aioclient_mock.get(ENTRIES_URL, status=500)
+    entry = await _setup(hass)
+    assert entry.state.value == "loaded"
+    lock = er.async_get(hass).async_get_entity_id("lock", DOMAIN, f"{entry.entry_id}_lock_s1_l1")
+    assert hass.states.get(lock).state == "locked"
+
+
+async def test_diagnostics_redacts_entries(hass: HomeAssistant, aioclient_mock) -> None:
+    from custom_components.saltoks.diagnostics import async_get_config_entry_diagnostics
+
+    _token(aioclient_mock)
+    _api(aioclient_mock, entries=[_entry("e1", "2026-11-11T08:00:00.000")])
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            options={"include_user_details": True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    json.dumps(diag)
+    latest = diag["data"]["latest_entries"]["s1/l1"]
+    assert latest["user_first_name"] == "**REDACTED**"
+    assert latest["event_category"] == "Opening"
+
+
+async def test_options_include_user_details(hass: HomeAssistant, aioclient_mock) -> None:
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert {str(k) for k in result["data_schema"].schema} == {"scan_interval", "include_user_details"}
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"scan_interval": 10, "include_user_details": True})
+    await hass.async_block_till_done()  # the entry reloads with the new options
+    assert entry.options["include_user_details"] is True

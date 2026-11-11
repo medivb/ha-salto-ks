@@ -10,7 +10,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import API_BASE_URL, TOKEN_EXPIRY_MARGIN, TOKEN_URL
+from .const import API_BASE_URL, ENTRIES_URL, TOKEN_EXPIRY_MARGIN, TOKEN_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,7 +170,11 @@ class SaltoKSClient:
     # ------------------------------------------------------------------- api
 
     async def _request(
-        self, method: str, path_or_url: str, json_body: dict[str, Any] | None = None
+        self,
+        method: str,
+        path_or_url: str,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
     ) -> Any:
         url = path_or_url if path_or_url.startswith("http") else f"{API_BASE_URL}{path_or_url}"
         for attempt in range(2):
@@ -178,7 +182,12 @@ class SaltoKSClient:
             headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
             try:
                 async with self._session.request(
-                    method, url, headers=headers, json=json_body, timeout=REQUEST_TIMEOUT
+                    method,
+                    url,
+                    headers=headers,
+                    json=json_body,
+                    params=params,
+                    timeout=REQUEST_TIMEOUT,
                 ) as resp:
                     status = resp.status
                     text = await resp.text()
@@ -247,6 +256,16 @@ class SaltoKSClient:
             f"/sites/{site_id}/locks/{lock_id}/easy_office_mode_schedule",
             json_body=schedule,
         )
+
+    async def async_get_recent_entries(self, site_id: str, top: int) -> list[dict[str, Any]]:
+        """Newest entries (access events) of a site, newest first (first page only)."""
+        data = await self._request(
+            "GET",
+            ENTRIES_URL.format(site_id=site_id),
+            params={"$orderby": "utc_date_time desc", "$top": str(top)},
+        )
+        items = data.get("items") if isinstance(data, dict) else data
+        return [x for x in items or [] if isinstance(x, dict)]
 
     async def async_delete_eom_schedule(self, site_id: str, lock_id: str) -> Any:
         return await self._request(

@@ -20,6 +20,7 @@ from homeassistant.helpers.selector import (
 
 from .api import SaltoKSApiError, SaltoKSAuthError, SaltoKSClient
 from .const import (
+    CONF_INCLUDE_USER_DETAILS,
     CONF_CLIENT_ID,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
@@ -128,19 +129,21 @@ class SaltoKSConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class SaltoKSOptionsFlow(OptionsFlow):
-    """Options: polling interval."""
+    """Options: polling interval and whether entries keep user details."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
         current = self.config_entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+        include_user = self.config_entry.options.get(CONF_INCLUDE_USER_DETAILS, False)
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_SCAN_INTERVAL, default=current): vol.All(
                         vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL)
-                    )
+                    ),
+                    vol.Required(CONF_INCLUDE_USER_DETAILS, default=include_user): bool,
                 }
             ),
         )

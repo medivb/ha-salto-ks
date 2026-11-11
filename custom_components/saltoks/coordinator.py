@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -17,13 +18,18 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import SaltoKSApiError, SaltoKSAuthError, SaltoKSClient
 from . import const, eom
 from .const import (
+    CONF_INCLUDE_USER_DETAILS,
     CONF_SCAN_INTERVAL,
+    ENTRIES_PAGE_SIZE,
+    ENTRY_USER_FIELDS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     MAX_CONCURRENT_REQUESTS,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+MAX_SEEN_ENTRIES = 1000
 
 type SaltoKSConfigEntry = ConfigEntry[SaltoKSCoordinator]
 
@@ -37,6 +43,10 @@ class SaltoKSData:
     locks: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     # Sites whose lock list could not be refreshed in the last cycle.
     stale_sites: set[str] = field(default_factory=set)
+    # Entries that appeared since the previous cycle, per (site_id, lock_id),
+    # oldest first. Consumers use entries_cycle to process each batch once.
+    new_entries: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    entries_cycle: int = 0
 
 
 class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
@@ -61,10 +71,49 @@ class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
         self.claimed_metadata: set[str] = set()
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self._eom_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # Entry ids already processed per site (bounded), and the newest
+        # entry per (site_id, lock_id).
+        self._seen_entries: dict[str, deque[str]] = {}
+        self._seen_entry_ids: dict[str, set[str]] = {}
+        self.latest_entries: dict[tuple[str, str], dict[str, Any]] = {}
+        self._entries_cycle = 0
 
     async def _fetch_locks(self, site_id: str) -> list[dict[str, Any]]:
         async with self._semaphore:
             return await self.client.async_get_locks(site_id)
+
+    async def _fetch_entries(self, site_id: str) -> list[dict[str, Any]]:
+        async with self._semaphore:
+            return await self.client.async_get_recent_entries(site_id, ENTRIES_PAGE_SIZE)
+
+    def _process_entries(
+        self, data: SaltoKSData, site_id: str, entries: list[dict[str, Any]]
+    ) -> None:
+        """Record new entries. The first successful fetch of a site only sets
+        the baseline (newest entry per lock) without reporting anything new."""
+        include_user = self.config_entry.options.get(CONF_INCLUDE_USER_DETAILS, False)
+        first_fetch = site_id not in self._seen_entry_ids
+        seen = self._seen_entry_ids.setdefault(site_id, set())
+        order = self._seen_entries.setdefault(site_id, deque())
+
+        def _sort_key(entry: dict[str, Any]) -> str:
+            return str(entry.get("utc_date_time") or "")
+
+        for entry in sorted(entries, key=_sort_key):
+            entry_id = str(entry.get("id") or "")
+            lock_id = str(entry.get("lock_id") or "")
+            if not entry_id or not lock_id or entry_id in seen:
+                continue
+            seen.add(entry_id)
+            order.append(entry_id)
+            if not include_user:
+                entry = {k: v for k, v in entry.items() if k not in ENTRY_USER_FIELDS}
+            self.latest_entries[(site_id, lock_id)] = entry
+            if not first_fetch:
+                data.new_entries.setdefault((site_id, lock_id), []).append(entry)
+
+        while len(order) > MAX_SEEN_ENTRIES:
+            seen.discard(order.popleft())
 
     async def _async_update_data(self) -> SaltoKSData:
         previous = self.data or SaltoKSData()
@@ -94,6 +143,21 @@ class SaltoKSCoordinator(DataUpdateCoordinator[SaltoKSData]):
             data.locks[site_id] = {
                 str(lock["id"]): lock for lock in result if lock.get("id") is not None
             }
+
+        # Entries (access events): one request per site. A failure here does
+        # not fail the update; the entries are picked up at the next poll.
+        entry_results = await asyncio.gather(
+            *(self._fetch_entries(site_id) for site_id in sites), return_exceptions=True
+        )
+        for site_id, result in zip(sites, entry_results, strict=True):
+            if isinstance(result, SaltoKSAuthError):
+                raise ConfigEntryAuthFailed(str(result)) from result
+            if isinstance(result, BaseException):
+                _LOGGER.debug("Could not refresh entries for site %s: %s", site_id, result)
+                continue
+            self._process_entries(data, site_id, result)
+        self._entries_cycle += 1
+        data.entries_cycle = self._entries_cycle
         return data
 
     @callback

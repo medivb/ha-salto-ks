@@ -11,50 +11,52 @@ The locks are controlled via a feature in Salto KS called "remote opening". The 
 3. *Settings → Devices & services → Add integration → Salto KS*.
 4. Enter username, password and client ID.
 
-Polling interval: *Configure* on the integration (5–300 s, default 10 s).
+Update interval and other options: *Configure* on the integration (update interval 5–300 seconds, default 10).
 
-## Authentication
+## Sign-in
 
-- Specify a username and password you would normally use to access the Salto KS web frontend (https://app.saltoks.com) and request a client id for Basic username/password authentication.
-- The access token is reused until 60 s before expiry, then renewed with `grant_type=refresh_token` when the server issued a refresh token; otherwise a new password grant is performed. Because the integration typically polls every 10 s, the session is kept alive continuously.
-- If refreshing fails, the integration authenticates again with the stored username and password. A `401` from the API forces a token renewal and one retry.
-- If the identity server rejects the credentials (`invalid_grant`, `invalid_client`, …), Home Assistant starts a re-authentication flow.
-- Tokens are held in memory only; they are not written to disk.
-
-## Locks
-
-After a lock or unlock request, the integration tries to refresh the state of that particular lock every second until the lock reports the requested `locked_state`, for at most 10 seconds. Meanwhile the lock is shown as *locking* / *unlocking*, and each response is applied immediately. If the state is not confirmed within 10 seconds, a warning is logged and the entity shows the state the API reports; the regular polling continues as usual.
-
-State: `locked_state == "locked"` → *locked*; any other value → *unlocked*; missing → *unknown*. The raw value is available as the `locked_state` attribute.
+- Use the username and password you normally use for the Salto KS web app (https://app.saltoks.com), together with the client ID you received for this integration.
+- The integration stays signed in on its own. If your credentials stop working (for example after a password change), Home Assistant asks you to sign in again.
+- Your session is kept in memory only.
 
 ## Devices
 
-Account (main device) → one device per site (named after `customer_reference`) → one device per lock (named after the lock's `customer_reference`). Each lock device holds the lock entity, the Easy Office Mode controls and the lock's metadata entities.
+The integration creates:
+
+- one device for your account, with your profile picture and account details;
+- one device per site, named after the site;
+- one device per lock, named after the lock and linked to its site.
+
+Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and the lock's details.
+
+## Locks
+
+- Locking or unlocking a lock shows it as *locking* / *unlocking* until Salto KS confirms the new state, usually within a few seconds.
+- If the new state is not confirmed within 10 seconds, the lock shows the state reported by Salto KS and a warning is written to the log. The regular updates continue as usual.
 
 ## Easy Office Mode
 
-Easy Office Mode is a schedule per lock: on the enabled weekdays between the start and end date, the lock may stay unlocked during the daily window and is locked automatically by the gateway at the end time. With *auto start* enabled, the lock is also unlocked automatically when the window starts. Times and dates are local time.
+Easy Office Mode is a schedule per lock. On the selected weekdays, between the start and end date, the lock can stay unlocked during the daily time window and is locked automatically at the end time. With *auto start* on, the lock is also unlocked automatically when the window starts. All times and dates are local time.
 
-Each lock device has these controls (configuration category):
+Each lock device has these settings:
 
-| Control | Type |
+| Setting | What it does |
 |---|---|
-| Easy Office Mode auto start | switch |
-| Easy Office Mode Monday … Sunday | switch |
-| Easy Office Mode start time / end time | time |
-| Easy Office Mode start date / end date | date |
-| Remove Easy Office Mode schedule | button |
+| Easy Office Mode auto start | Unlock automatically when the window starts |
+| Easy Office Mode Monday … Sunday | The days on which the schedule applies |
+| Easy Office Mode start time / end time | The daily time window |
+| Easy Office Mode start date / end date | The period in which the schedule applies; the end date is included |
+| Remove Easy Office Mode schedule | Removes the schedule from the lock |
 
-- Changing a control sends the complete schedule. Changes to the same lock are sent one at a time; afterwards the lock is read back so the controls show what was stored.
-- Dates are sent as `YYYY-MM-DDT00:00:00.000` (start) and `YYYY-MM-DDT23:59:59.999` (end), so the last day is included.
-- The end date is optional. Without an end date (sent as an empty string) the schedule runs indefinitely; the end date control then shows *unknown* and has the attribute `no_end_date: true`. To remove an end date, use the action below with `end_date: null`.
-- The end time must be later than the start time, and the end date must not be before the start date; otherwise the change is refused with an error.
-- A lock without a schedule shows all switches off and the times and dates as unknown. The first change creates a schedule with defaults for the other fields: auto start and all days off, 09:00–17:00, today as start date and no end date (indefinite).
-- *Remove Easy Office Mode schedule* deletes the schedule. The button is unavailable while the lock has no schedule. Home Assistant does not ask for confirmation when a button is pressed.
+- Changes are saved in Salto KS straight away.
+- The end time must be later than the start time, and the end date may not be before the start date.
+- The end date is optional. Without an end date the schedule applies indefinitely; the end date then shows as *unknown*. To remove an end date, use the action below.
+- A lock without a schedule shows all days off and no times or dates. The first change you make creates a schedule with: auto start and all days off, 09:00–17:00, today as start date and no end date.
+- The remove button is only available while the lock has a schedule. Home Assistant does not ask for confirmation when you press it.
 
-### Action: `saltoks.set_easy_office_mode_schedule`
+### Action: Set Easy Office Mode schedule
 
-Changes several fields at once, for one or more locks (target lock entities, devices or areas). Fields that are left out keep their current value; at least one field is required. `end_date: null` (or an empty value) removes the end date, so the schedule runs indefinitely. `days` lists the enabled weekdays, days not listed are disabled.
+Changes several settings at once, for one or more locks. Settings you leave out stay as they are. `days` lists the days on which the schedule applies; other days are switched off. Use `end_date: null` to remove the end date.
 
 ```yaml
 action: saltoks.set_easy_office_mode_schedule
@@ -71,9 +73,9 @@ data:
   end_date: "2026-12-31"
 ```
 
-### Action: `saltoks.remove_easy_office_mode_schedule`
+### Action: Remove Easy Office Mode schedule
 
-Removes the schedule of one or more locks. Locks without a schedule are skipped.
+Removes the schedule from one or more locks.
 
 ```yaml
 action: saltoks.remove_easy_office_mode_schedule
@@ -83,22 +85,40 @@ target:
     - lock.back_door
 ```
 
-## Metadata entities (auto-discovered)
+## Last entry
 
-Every field returned by Salto KS becomes an entity (diagnostic category):
+Each lock device has a *Last entry* event. It shows when the lock was last used and what happened (for example an opening or a denied attempt), with details such as how access was given. Every new entry is recorded in the history and logbook of Home Assistant and can be used to trigger automations.
 
-- picture URL fields → `image`, named after the parent object (for example "Owner picture"); no sensor is created for them
-- booleans → `binary_sensor`
-- strings / numbers → `sensor` (ISO date-time fields named `*_at`, `*date*`, `*time*` … get the timestamp device class)
-- lists → `sensor` with the item count as state; full list in the `items` attribute
-- nested objects are flattened up to 3 levels (`address.city` → "Address city")
-- strings longer than 255 characters are truncated in the state; the full value is in the `value` attribute
+- Only entries that happen while Home Assistant is running are reported. After the integration is first added, each lock shows its most recent entry.
+- By default, entries do **not** include who used the lock. To include the person's name, alias and picture, turn on *Include user details in entries* under *Configure* on the integration. This is personal data and is stored in your Home Assistant history; only turn it on if you are allowed to keep this information.
 
-Identifier fields (`id`, `*_id`, `*Id`, `uuid`, for example `owner.id`) are **disabled by default**. To use one, open the entity settings and turn on *Enabled*.
+Example: notify when the front door is opened.
 
-New fields, sites or locks that Salto KS returns later are added automatically at the next poll; no update of the integration is needed. Entities for fields that disappear become *unavailable*.
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.front_door_last_entry
+    not_from: unavailable
+conditions:
+  - condition: state
+    entity_id: event.front_door_last_entry
+    attribute: event_type
+    state: opening
+actions:
+  - action: notify.my_mobile
+    data:
+      message: The front door was opened.
+```
 
-Diagnostics (*Download diagnostics*) contain all raw API data, with credentials and personal data redacted.
+The event types depend on what Salto KS reports and are added as they occur; you can see them in the `event_types` attribute of the entity.
+
+## Details per account, site and lock
+
+All other information Salto KS provides about your account, sites and locks is shown as entities in the *Diagnostic* section of each device. New information is added automatically when Salto KS starts providing it. Pictures are shown as image entities.
+
+Technical identifiers are disabled by default. To use one, open the entity settings and turn on *Enabled*.
+
+*Download diagnostics* on the integration gives all collected information, with credentials and personal data removed.
 
 ## Notifications
 
@@ -147,7 +167,7 @@ mode: single
 
 ## Please note
 
-**Rate limits**: each poll makes 2 + (number of sites) requests (lock lists are fetched in parallel, up to 5 at a time). Increase the interval if Salto KS throttles the account.
+Every update contacts Salto KS a few times per site. With many sites, or if Salto KS limits the number of requests for your account, increase the update interval under *Configure*.
 
 ## Tests
 

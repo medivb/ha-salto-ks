@@ -36,7 +36,11 @@
       "init": {
         "title": "Salto KS options",
         "data": {
-          "scan_interval": "Polling interval (seconds)"
+          "scan_interval": "Polling interval (seconds)",
+          "include_user_details": "Include user details in entries"
+        },
+        "data_description": {
+          "include_user_details": "Store who caused an entry (name, alias, picture and user ID) in Home Assistant. This is personal data and is kept in the Home Assistant history. When off, only the event, time and lock details are stored."
         }
       }
     }
@@ -92,6 +96,11 @@
     "button": {
       "eom_remove": {
         "name": "Remove Easy Office Mode schedule"
+      }
+    },
+    "event": {
+      "last_entry": {
+        "name": "Last entry"
       }
     }
   },
