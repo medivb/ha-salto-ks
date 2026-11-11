@@ -26,6 +26,12 @@ TO_REDACT = {
     "phone_number",
     "image_url",
     "address",
+    # Entry (access event) user details.
+    "user_id",
+    "user_first_name",
+    "user_last_name",
+    "user_alias",
+    "user_image_url",
 }
 
 
@@ -34,6 +40,10 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     data = asdict(entry.runtime_data.data)
     data["stale_sites"] = sorted(data["stale_sites"])
+    data["new_entries"] = {f"{s}/{lk}": v for (s, lk), v in data["new_entries"].items()}
+    data["latest_entries"] = {
+        f"{s}/{lk}": v for (s, lk), v in entry.runtime_data.latest_entries.items()
+    }
     return {
         "entry": async_redact_data(dict(entry.data), TO_REDACT),
         "options": dict(entry.options),
