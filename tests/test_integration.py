@@ -54,13 +54,15 @@ def _token(aioclient_mock, status=200, access="tok1"):
 
 
 ENTRIES_URL = "https://connect.saltoks.com/v1.1/sites/s1/entries"
+INCIDENTS_URL = "https://connect.saltoks.com/v1.1/sites/s1/incidents"
 
 
-def _api(aioclient_mock, locks=None, me=None, entries=None):
+def _api(aioclient_mock, locks=None, me=None, entries=None, incidents=None):
     aioclient_mock.get(f"{API_BASE_URL}/me", json=me or ME)
     aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
     aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=locks or LOCKS)
     aioclient_mock.get(ENTRIES_URL, json={"items": entries or [], "continuation_token": None})
+    aioclient_mock.get(INCIDENTS_URL, json={"items": incidents or [], "continuation_token": None})
 
 
 async def _setup(hass: HomeAssistant) -> MockConfigEntry:
@@ -724,17 +726,17 @@ def _entry(entry_id, when, lock="l1", category="Opening", **extra):
     }
 
 
-async def _poll(hass, aioclient_mock, entries, locks=None):
+async def _poll(hass, aioclient_mock, entries, locks=None, incidents=None):
     aioclient_mock.clear_requests()
     _token(aioclient_mock)
-    _api(aioclient_mock, locks=locks, entries=entries)
+    _api(aioclient_mock, locks=locks, entries=entries, incidents=incidents)
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
     await hass.async_block_till_done(wait_background_tasks=True)
 
 
-def _event_id(hass, entry, lock="l1"):
+def _event_id(hass, entry, lock="l1", kind="last_entry"):
     return er.async_get(hass).async_get_entity_id(
-        "event", DOMAIN, f"{entry.entry_id}_lock_s1_{lock}_last_entry")
+        "event", DOMAIN, f"{entry.entry_id}_lock_s1_{lock}_{kind}")
 
 
 async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) -> None:
@@ -756,8 +758,11 @@ async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) ->
     state = hass.states.get(ev)
     assert state.attributes["friendly_name"] == "Front door Last entry"
     # Fresh install: the most recent entry is shown; user details are left out by default.
-    assert state.attributes["event_type"] == "opening"
+    assert state.attributes["event_type"] == "Opening - Key"
     assert state.attributes["id"] == "e1"
+    # Only the local time is kept.
+    assert "utc_date_time" not in state.attributes
+    assert state.attributes["local_date_time"] == "2026-11-11T08:00:00.000"
     assert "user_first_name" not in state.attributes and "user_id" not in state.attributes
     assert state.attributes["access_by"] == "Mobile"
     # Lock without entries.
@@ -785,8 +790,8 @@ async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) ->
     assert l1 == ["e2", "e3"]  # oldest first, each once
     assert [i for e, i in fired if e != ev] == ["e4"]
     state = hass.states.get(ev)
-    assert state.attributes["event_type"] == "denied_access"
-    assert set(state.attributes["event_types"]) >= {"opening", "denied_access"}
+    assert state.attributes["event_type"] == "Denied access - Key"
+    assert set(state.attributes["event_types"]) >= {"Opening - Key", "Denied access - Key"}
 
     # The same entries are not reported again, also not on other updates.
     fired.clear()
@@ -806,6 +811,7 @@ async def test_entries_with_user_details(hass: HomeAssistant, aioclient_mock) ->
     await hass.async_block_till_done()
     attrs = hass.states.get(_event_id(hass, entry)).attributes
     assert attrs["user_first_name"] == "Jane" and attrs["user_id"] == "u9"
+    assert attrs["event_type"] == "Opening - Key - Jane Doe"
 
 
 async def test_entries_failure_does_not_fail_update(hass: HomeAssistant, aioclient_mock) -> None:
@@ -832,7 +838,7 @@ async def test_diagnostics_redacts_entries(hass: HomeAssistant, aioclient_mock) 
     await hass.async_block_till_done()
     diag = await async_get_config_entry_diagnostics(hass, entry)
     json.dumps(diag)
-    latest = diag["data"]["latest_entries"]["s1/l1"]
+    latest = diag["data"]["latest_events"]["entries"]["s1/l1"]
     assert latest["user_first_name"] == "**REDACTED**"
     assert latest["event_category"] == "Opening"
 
@@ -847,3 +853,86 @@ async def test_options_include_user_details(hass: HomeAssistant, aioclient_mock)
         result["flow_id"], {"scan_interval": 10, "include_user_details": True})
     await hass.async_block_till_done()  # the entry reloads with the new options
     assert entry.options["include_user_details"] is True
+
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"event_category": "Opening", "event_detail": "Key",
+          "user_first_name": "Jane", "user_last_name": "Doe"}, "Opening - Key - Jane Doe"),
+        ({"event_category": "Opening", "event_detail": "",
+          "user_first_name": "Jane", "user_last_name": "Doe"}, "Opening - Jane Doe"),
+        ({"event_category": "Opening", "event_detail": "Key"}, "Opening - Key"),
+        ({"event_category": "Opening", "event_detail": None,
+          "user_first_name": None, "user_last_name": ""}, "Opening"),
+        ({"event_category": "Opening", "user_first_name": "Jane"}, "Opening - Jane"),
+        ({"event_category": "Opening", "user_last_name": "Doe"}, "Opening - Doe"),
+        ({}, "Unknown"),
+    ],
+)
+def test_event_type_composition(fields, expected) -> None:
+    from custom_components.saltoks.event import event_type_of
+
+    assert event_type_of(fields) == expected
+
+
+def _incident(incident_id, when, lock="l1", category="Battery", detail="Low", **extra):
+    return {
+        "id": incident_id, "event_category": category, "event_detail": detail,
+        "utc_date_time": when, "local_date_time": when, "lock_id": lock,
+        "lock_customer_reference": "Front door", "ttl_in_seconds": 0, **extra,
+    }
+
+
+async def test_last_incident_event(hass: HomeAssistant, aioclient_mock, freezer) -> None:
+    from homeassistant.core import callback
+
+    _token(aioclient_mock)
+    _api(aioclient_mock, locks=EOM_LOCKS,
+         incidents=[_incident("i1", "2026-11-11T07:00:00.000")])
+    entry = await _setup(hass)
+
+    call = next(c for c in aioclient_mock.mock_calls if "/incidents" in str(c[1]))
+    assert call[1].query["$orderby"] == "utc_date_time desc"
+    assert call[1].query["$top"] == "50"
+
+    inc = _event_id(hass, entry, kind="last_incident")
+    lock_dev = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "lock_s1_l1")})
+    assert er.async_get(hass).async_get(inc).device_id == lock_dev.id
+    state = hass.states.get(inc)
+    assert state.attributes["friendly_name"] == "Front door Last incident"
+    assert state.attributes["event_type"] == "Battery - Low"
+    assert "utc_date_time" not in state.attributes
+    # Incidents and entries are separate: no entries yet.
+    assert hass.states.get(_event_id(hass, entry)).state == "unknown"
+
+    fired: list[str] = []
+
+    @callback
+    def _record(event):
+        if event.data["entity_id"] == inc:
+            fired.append(event.data["new_state"].attributes["event_type"])
+
+    hass.bus.async_listen("state_changed", _record)
+    freezer.tick(11)
+    await _poll(hass, aioclient_mock, [], locks=EOM_LOCKS, incidents=[
+        _incident("i2", "2026-11-11T09:00:00.000", category="Intrusion", detail=""),
+        _incident("i1", "2026-11-11T07:00:00.000"),
+    ])
+    assert fired == ["Intrusion"]
+
+
+async def test_event_types_are_bounded(hass: HomeAssistant, aioclient_mock, freezer) -> None:
+    from custom_components.saltoks.event import MAX_EVENT_TYPES
+
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    many = [_entry(f"x{i}", f"2026-11-11T10:{i // 60:02d}:{i % 60:02d}.000", category=f"Cat {i}")
+            for i in range(MAX_EVENT_TYPES + 20)]
+    freezer.tick(11)
+    await _poll(hass, aioclient_mock, many)
+    types = hass.states.get(_event_id(hass, entry)).attributes["event_types"]
+    assert len(types) == MAX_EVENT_TYPES
+    assert f"Cat {MAX_EVENT_TYPES + 19} - Key" in types

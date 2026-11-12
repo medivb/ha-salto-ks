@@ -40,9 +40,13 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     data = asdict(entry.runtime_data.data)
     data["stale_sites"] = sorted(data["stale_sites"])
-    data["new_entries"] = {f"{s}/{lk}": v for (s, lk), v in data["new_entries"].items()}
-    data["latest_entries"] = {
-        f"{s}/{lk}": v for (s, lk), v in entry.runtime_data.latest_entries.items()
+    data["new_events"] = {
+        feed: {f"{s}/{lk}": v for (s, lk), v in events.items()}
+        for feed, events in data["new_events"].items()
+    }
+    data["latest_events"] = {
+        feed: {f"{s}/{lk}": v for (s, lk), v in events.items()}
+        for feed, events in entry.runtime_data.latest_events.items()
     }
     return {
         "entry": async_redact_data(dict(entry.data), TO_REDACT),

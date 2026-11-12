@@ -13,10 +13,16 @@ CONF_CLIENT_ID: Final = "client_id"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_INCLUDE_USER_DETAILS: Final = "include_user_details"
 
-# Entries (access events) are only available in API version 1.1.
-ENTRIES_URL: Final = "https://connect.saltoks.com/v1.1/sites/{site_id}/entries"
-# Newest entries requested per site per poll; new ones are found by id.
-ENTRIES_PAGE_SIZE: Final = 50
+# Event feeds per site: entries (access events) and incidents. Both are only
+# available in API version 1.1 and share the same query parameters.
+FEED_ENTRIES: Final = "entries"
+FEED_INCIDENTS: Final = "incidents"
+FEED_URLS: Final = {
+    FEED_ENTRIES: "https://connect.saltoks.com/v1.1/sites/{site_id}/entries",
+    FEED_INCIDENTS: "https://connect.saltoks.com/v1.1/sites/{site_id}/incidents",
+}
+# Newest events requested per site and feed per poll; new ones are found by id.
+FEED_PAGE_SIZE: Final = 50
 # Entry fields that identify a person; only kept when the user opts in.
 ENTRY_USER_FIELDS: Final = frozenset(
     {"user_id", "user_first_name", "user_last_name", "user_alias", "user_image_url"}

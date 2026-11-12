@@ -10,7 +10,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import API_BASE_URL, ENTRIES_URL, TOKEN_EXPIRY_MARGIN, TOKEN_URL
+from .const import API_BASE_URL, FEED_URLS, TOKEN_EXPIRY_MARGIN, TOKEN_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -257,11 +257,13 @@ class SaltoKSClient:
             json_body=schedule,
         )
 
-    async def async_get_recent_entries(self, site_id: str, top: int) -> list[dict[str, Any]]:
-        """Newest entries (access events) of a site, newest first (first page only)."""
+    async def async_get_recent_events(
+        self, feed: str, site_id: str, top: int
+    ) -> list[dict[str, Any]]:
+        """Newest entries or incidents of a site, newest first (first page only)."""
         data = await self._request(
             "GET",
-            ENTRIES_URL.format(site_id=site_id),
+            FEED_URLS[feed].format(site_id=site_id),
             params={"$orderby": "utc_date_time desc", "$top": str(top)},
         )
         items = data.get("items") if isinstance(data, dict) else data
