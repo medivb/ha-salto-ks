@@ -27,7 +27,7 @@ The integration creates:
 - one device per site, named after the site;
 - one device per lock, named after the lock and linked to its site.
 
-Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and the lock's details.
+Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and last incident, and the lock's details.
 
 ## Locks
 
@@ -85,14 +85,21 @@ target:
     - lock.back_door
 ```
 
-## Last entry
+## Last entry and last incident
 
-Each lock device has a *Last entry* event. It shows when the lock was last used and what happened (for example an opening or a denied attempt), with details such as how access was given. Every new entry is recorded in the history and logbook of Home Assistant and can be used to trigger automations.
+Each lock device has two events:
 
-- Only entries that happen while Home Assistant is running are reported. After the integration is first added, each lock shows its most recent entry.
+- **Last entry**: when the lock was last used and what happened, for example an opening or a denied attempt.
+- **Last incident**: the most recent incident reported for the lock.
+
+Every new entry or incident is recorded in the history and logbook of Home Assistant and can be used to trigger automations.
+
+The event is described as *category - detail - user*, for example `Opening - Key - Jane Doe`. Parts without a value are left out, so it can also be `Opening - Key` or just `Opening`. Incidents never include a user. The time of the event is shown in local time (`local_date_time`).
+
+- Only entries and incidents that happen while Home Assistant is running are reported. After the integration is first added, each lock shows its most recent entry and incident.
 - By default, entries do **not** include who used the lock. To include the person's name, alias and picture, turn on *Include user details in entries* under *Configure* on the integration. This is personal data and is stored in your Home Assistant history; only turn it on if you are allowed to keep this information.
 
-Example: notify when the front door is opened.
+Example: notify when the front door is opened. The condition uses `event_category`, so it works regardless of the detail and the user.
 
 ```yaml
 triggers:
@@ -102,15 +109,16 @@ triggers:
 conditions:
   - condition: state
     entity_id: event.front_door_last_entry
-    attribute: event_type
-    state: opening
+    attribute: event_category
+    state: Opening
 actions:
   - action: notify.my_mobile
     data:
-      message: The front door was opened.
+      message: >
+        Front door: {{ state_attr('event.front_door_last_entry', 'event_type') }}
 ```
 
-The event types depend on what Salto KS reports and are added as they occur; you can see them in the `event_types` attribute of the entity.
+The descriptions depend on what Salto KS reports and are added as they occur; the most recent ones are listed in the `event_types` attribute of the entity.
 
 ## Details per account, site and lock
 

@@ -101,6 +101,9 @@
     "event": {
       "last_entry": {
         "name": "Last entry"
+      },
+      "last_incident": {
+        "name": "Last incident"
       }
     }
   },
