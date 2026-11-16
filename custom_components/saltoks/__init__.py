@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import SaltoKSClient
-from .const import CONF_CLIENT_ID, DOMAIN
+from .const import CONF_CLIENT_ID, CONF_CLIENT_SECRET, DOMAIN
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
 from .entity import (
     account_name,
@@ -39,6 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
         entry.data[CONF_USERNAME],
         entry.data[CONF_PASSWORD],
         entry.data[CONF_CLIENT_ID],
+        entry.data.get(CONF_CLIENT_SECRET, ""),
     )
     coordinator = SaltoKSCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
@@ -101,6 +104,21 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) ->
     """Migrate older config entries."""
     if entry.version > 1:
         return False
+    if entry.minor_version < 4:
+        # 1.4: the client ID field used to hold the ready-made Basic value,
+        # base64("client_id:client_secret"). Split it into both fields.
+        if not entry.data.get(CONF_CLIENT_SECRET):
+            split = split_basic_value(entry.data.get(CONF_CLIENT_ID, ""))
+            if split:
+                client_id, client_secret = split
+                hass.config_entries.async_update_entry(
+                    entry,
+                    data={
+                        **entry.data,
+                        CONF_CLIENT_ID: client_id,
+                        CONF_CLIENT_SECRET: client_secret,
+                    },
+                )
     if entry.minor_version < 3:
         # 1.3: identifier entities are disabled instead of hidden. Applied once,
         # so a later choice by the user to enable one is respected.
@@ -119,7 +137,24 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) ->
             if changes:
                 ent_reg.async_update_entity(reg_entry.entity_id, **changes)
         hass.config_entries.async_update_entry(entry, minor_version=3)
+    if entry.minor_version < 4:
+        hass.config_entries.async_update_entry(entry, minor_version=4)
     return True
+
+
+def split_basic_value(value: str) -> tuple[str, str] | None:
+    """Return (client_id, client_secret) when value is base64("id:secret")."""
+    value = value.strip()
+    if value.lower().startswith("basic "):
+        value = value[6:].strip()
+    try:
+        decoded = base64.b64decode(value, validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    client_id, sep, client_secret = decoded.partition(":")
+    if not sep or not client_id or not decoded.isprintable():
+        return None
+    return client_id, client_secret
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:

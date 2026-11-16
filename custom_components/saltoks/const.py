@@ -10,6 +10,7 @@ TOKEN_URL: Final = "https://identity.eu.my-clay.com/connect/token"
 API_BASE_URL: Final = "https://connect.saltoks.com/v1.2"
 
 CONF_CLIENT_ID: Final = "client_id"
+CONF_CLIENT_SECRET: Final = "client_secret"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_INCLUDE_USER_DETAILS: Final = "include_user_details"
 

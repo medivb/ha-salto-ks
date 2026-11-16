@@ -9,13 +9,15 @@ The locks are controlled via a feature in Salto KS called "remote opening". The 
 1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-salto-ks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Salto KS*.
-4. Enter username, password and client ID.
+4. Enter your username and password, and the client ID and client secret.
 
 Update interval and other options: *Configure* on the integration (update interval 5–300 seconds, default 10).
 
 ## Sign-in
 
-- Use the username and password you normally use for the Salto KS web app (https://app.saltoks.com), together with the client ID you received for this integration.
+- Use the username and password you normally use for the Salto KS web app (https://app.saltoks.com), together with the client ID and client secret you received as an integrator.
+- The client secret is stored in Home Assistant like your password. Do not share it, and remove it from screenshots and issue reports.
+- If you used an earlier version, where a single combined value was entered as client ID, it is converted to a separate client ID and client secret automatically.
 - The integration stays signed in on its own. If your credentials stop working (for example after a password change), Home Assistant asks you to sign in again.
 - Your session is kept in memory only.
 
