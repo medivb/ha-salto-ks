@@ -21,6 +21,7 @@ ENTRY_DATA = {
     "username": "user@example.com",
     "password": "pw",
     "client_id": "my-client",
+    "client_secret": "my-secret",
 }
 
 ME = {"id": "u1", "first_name": "Test", "last_name": "User", "email": "t@example.com",
@@ -203,11 +204,12 @@ async def test_client_token_lifecycle(hass: HomeAssistant, aioclient_mock) -> No
 
 
 def test_basic_auth_formats() -> None:
+    import base64
     from custom_components.saltoks.api import SaltoKSClient
 
-    # The client ID is sent as-is, matching the manual curl request.
-    assert SaltoKSClient(None, "u", "p", "abc123==")._basic_auth == "Basic abc123=="
-    assert SaltoKSClient(None, "u", "p", " Basic abc123== ")._basic_auth == "Basic abc123=="
+    expected = "Basic " + base64.b64encode(b"my-client:s3cr+t/=").decode()
+    assert SaltoKSClient(None, "u", "p", "my-client", "s3cr+t/=")._basic_auth == expected
+    assert SaltoKSClient(None, "u", "p", " my-client ", " s3cr+t/= ")._basic_auth == expected
 
 
 async def test_token_request_matches_manual_call(hass: HomeAssistant, aioclient_mock) -> None:
@@ -215,10 +217,10 @@ async def test_token_request_matches_manual_call(hass: HomeAssistant, aioclient_
     from custom_components.saltoks.api import SaltoKSClient
 
     _token(aioclient_mock)
-    client = SaltoKSClient(async_get_clientsession(hass), "a@b.c", "pw", "CLIENTID")
+    client = SaltoKSClient(async_get_clientsession(hass), "a@b.c", "pw", "CLIENTID", "SECRET")
     await client.async_authenticate()
     _, url, data, headers = aioclient_mock.mock_calls[-1]
-    assert headers["Authorization"] == "Basic CLIENTID"
+    assert headers["Authorization"] == "Basic Q0xJRU5USUQ6U0VDUkVU"  # CLIENTID:SECRET
     assert headers["Content-Type"] == "application/x-www-form-urlencoded"
     assert data == {"grant_type": "password", "username": "a@b.c", "password": "pw"}
 
@@ -313,7 +315,7 @@ async def test_migration_disables_existing_id_entities(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
     migrated = entreg.async_get(old_id.entity_id)
     assert migrated.disabled_by is er.RegistryEntryDisabler.INTEGRATION
     assert migrated.hidden_by is None
@@ -456,7 +458,7 @@ async def test_poll_interval_and_timeout_defaults(hass: HomeAssistant, aioclient
 
 async def test_setup_form_fields(hass: HomeAssistant) -> None:
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    assert {str(k) for k in result["data_schema"].schema} == {"username", "password", "client_id"}
+    assert {str(k) for k in result["data_schema"].schema} == {"username", "password", "client_id", "client_secret"}
 
 
 
@@ -912,7 +914,8 @@ async def test_last_incident_event(hass: HomeAssistant, aioclient_mock, freezer)
     @callback
     def _record(event):
         if event.data["entity_id"] == inc:
-            fired.append(event.data["new_state"].attributes["event_type"])
+            if (new := event.data["new_state"]) and "event_type" in new.attributes:
+                fired.append(new.attributes["event_type"])
 
     hass.bus.async_listen("state_changed", _record)
     freezer.tick(11)
@@ -936,3 +939,58 @@ async def test_event_types_are_bounded(hass: HomeAssistant, aioclient_mock, free
     types = hass.states.get(_event_id(hass, entry)).attributes["event_types"]
     assert len(types) == MAX_EVENT_TYPES
     assert f"Cat {MAX_EVENT_TYPES + 19} - Key" in types
+
+
+
+@pytest.mark.parametrize("prefix", ["", "Basic "])
+async def test_migration_splits_basic_value(hass: HomeAssistant, aioclient_mock, prefix) -> None:
+    """Entries that stored base64("id:secret") in the client ID field are split."""
+    import base64
+
+    basic = base64.b64encode(b"my-client:my-secret").decode()
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="u1", version=1, minor_version=3,
+                            data={"username": "user@example.com", "password": "pw",
+                                  "client_id": prefix + basic})
+    entry.add_to_hass(hass)
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.minor_version == 4
+    assert entry.data["client_id"] == "my-client"
+    assert entry.data["client_secret"] == "my-secret"
+    token_call = next(c for c in aioclient_mock.mock_calls if "connect/token" in str(c[1]))
+    assert token_call[3]["Authorization"] == f"Basic {basic}"
+
+
+async def test_migration_keeps_unrecognised_client_id(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, unique_id="u1", version=1, minor_version=3,
+                            data={"username": "user@example.com", "password": "pw",
+                                  "client_id": "plain-client-id"})
+    entry.add_to_hass(hass)
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.minor_version == 4
+    assert entry.data["client_id"] == "plain-client-id"
+    assert "client_secret" not in entry.data
+
+
+async def test_reauth_asks_for_client_credentials(hass: HomeAssistant, aioclient_mock) -> None:
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    result = await entry.start_reauth_flow(hass)
+    assert {str(k) for k in result["data_schema"].schema} == {
+        "username", "password", "client_id", "client_secret"}
+    aioclient_mock.clear_requests()
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+        "username": "user@example.com", "password": "pw2",
+        "client_id": "new-client", "client_secret": "new-secret"})
+    await hass.async_block_till_done()
+    assert result["reason"] == "reauth_successful"
+    assert entry.data["client_id"] == "new-client"
+    assert entry.data["client_secret"] == "new-secret"

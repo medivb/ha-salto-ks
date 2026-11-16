@@ -9,14 +9,14 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_CLIENT_ID
+from .const import CONF_CLIENT_ID, CONF_CLIENT_SECRET
 from .coordinator import SaltoKSConfigEntry
 
 TO_REDACT = {
     CONF_USERNAME,
     CONF_PASSWORD,
     CONF_CLIENT_ID,
-    "client_secret",  # may exist in entries created by earlier versions
+    CONF_CLIENT_SECRET,
     "access_token",
     "refresh_token",
     "email",

@@ -3,11 +3,16 @@
     "step": {
       "user": {
         "title": "Salto KS",
-        "description": "Sign in with your Salto KS account. The client ID is sent exactly as entered (`Authorization: Basic <client ID>`).\n\nLast server response: {server_message}",
+        "description": "Sign in with your Salto KS account and the client ID and client secret you received as an integrator.\n\nLast server response: {server_message}",
         "data": {
           "username": "Username",
           "password": "Password",
-          "client_id": "Client ID"
+          "client_id": "Client ID",
+          "client_secret": "Client secret"
+        },
+        "data_description": {
+          "client_id": "The client ID you received as an integrator (not the base64 value).",
+          "client_secret": "The client secret that belongs to the client ID."
         }
       },
       "reauth_confirm": {
@@ -15,13 +20,15 @@
         "description": "The stored credentials were rejected. Please enter them again.\n\nLast server response: {server_message}",
         "data": {
           "username": "Username",
-          "password": "Password"
+          "password": "Password",
+          "client_id": "Client ID",
+          "client_secret": "Client secret"
         }
       }
     },
     "error": {
       "invalid_auth": "Username or password rejected (invalid_grant). See the server response below.",
-      "invalid_client": "Client ID rejected (invalid_client). See the server response below.",
+      "invalid_client": "Client ID or client secret rejected (invalid_client). See the server response below.",
       "unauthorized_client": "This client is not allowed to use the password grant (unauthorized_client).",
       "cannot_connect": "Unable to reach the Salto KS services. See the server response below.",
       "unknown": "Unexpected error."

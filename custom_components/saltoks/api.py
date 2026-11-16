@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
@@ -55,11 +56,13 @@ class SaltoKSClient:
         username: str,
         password: str,
         client_id: str,
+        client_secret: str = "",
     ) -> None:
         self._session = session
         self._username = username.strip()
         self._password = password
         self._client_id = client_id.strip()
+        self._client_secret = client_secret.strip()
         self._access_token: str | None = None
         self._refresh_token: str | None = None
         self._expires_at = 0.0
@@ -69,12 +72,10 @@ class SaltoKSClient:
 
     @property
     def _basic_auth(self) -> str:
-        """Authorization header for the token endpoint: ``Basic {client_id}``,
-        with the client ID sent exactly as entered."""
-        client_id = self._client_id
-        if client_id.lower().startswith("basic "):
-            client_id = client_id[6:].strip()
-        return f"Basic {client_id}"
+        """Client authentication for the token endpoint:
+        ``Basic base64(client_id:client_secret)``."""
+        raw = f"{self._client_id}:{self._client_secret}".encode()
+        return "Basic " + base64.b64encode(raw).decode()
 
     def invalidate_access_token(self) -> None:
         """Force the next request to obtain a new access token."""

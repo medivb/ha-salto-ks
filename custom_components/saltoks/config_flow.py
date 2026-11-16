@@ -22,6 +22,7 @@ from .api import SaltoKSApiError, SaltoKSAuthError, SaltoKSClient
 from .const import (
     CONF_INCLUDE_USER_DETAILS,
     CONF_CLIENT_ID,
+    CONF_CLIENT_SECRET,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -46,6 +47,7 @@ def _user_schema(defaults: Mapping[str, Any]) -> vol.Schema:
             vol.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, "")): str,
             vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
             vol.Required(CONF_CLIENT_ID, default=defaults.get(CONF_CLIENT_ID, "")): str,
+            vol.Required(CONF_CLIENT_SECRET): PASSWORD_SELECTOR,
         }
     )
 
@@ -54,7 +56,7 @@ class SaltoKSConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Salto KS."""
 
     VERSION = 1
-    MINOR_VERSION = 3
+    MINOR_VERSION = 4
 
     _server_message: str = ""
 
@@ -65,6 +67,7 @@ class SaltoKSConfigFlow(ConfigFlow, domain=DOMAIN):
             data[CONF_USERNAME],
             data[CONF_PASSWORD],
             data[CONF_CLIENT_ID],
+            data.get(CONF_CLIENT_SECRET, ""),
         )
         try:
             await client.async_authenticate()
@@ -116,6 +119,10 @@ class SaltoKSConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_USERNAME, default=entry.data[CONF_USERNAME]): str,
                     vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
+                    vol.Required(
+                        CONF_CLIENT_ID, default=entry.data.get(CONF_CLIENT_ID, "")
+                    ): str,
+                    vol.Required(CONF_CLIENT_SECRET): PASSWORD_SELECTOR,
                 }
             ),
             errors=errors,
