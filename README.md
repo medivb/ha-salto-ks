@@ -1,12 +1,14 @@
-# Salto KS Custom Integration for Home Assistant
+# Unofficial Salto KS Custom Integration for Home Assistant
 
-This integration polls the Salto KS cloud API (configurable, default every 10 seconds) and exposes all information about your accessible sites you are allowed to see with the account you are using and the locks within those sites you have access to.
+First of all, like the name suggests, this is an *unofficial* Salto KS integration. It is not provided by or maintained by any Salto Systems or Salto Group related entity.
+
+This integration polls the Salto KS cloud API (configurable, default every 10 seconds) and exposes all information about the sites you are allowed to see with the account you are using and the locks within those sites you have access to.
 
 The locks are controlled via a feature in Salto KS called "remote opening". The account used for this integration must have the appropriate permission to perform remote openings. Since Salto KS is an always online real time cloud locking solution, this usually works pretty fast. However, in case there is an issue with connectivity, the operation might not work. If the unlock command could not be delivered, it will expire and become invalid within a few minutes. The integration will keep polling for lock state changes, so as soon as connectivity is restored, the correct state will be reflected.
 
 ## Installation
 
-1. HACS (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-salto-ks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
+1. *HACS* (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-salto-ks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Salto KS*.
 4. Enter your username and password, and the client ID and client secret.
@@ -91,12 +93,12 @@ target:
 
 Each lock device has two events:
 
-- **Last entry**: when the lock was last used and what happened, for example an opening or a denied attempt.
+- **Last entry**: when the lock was last used and what happened, for example a successful opening or a denied opening attempt.
 - **Last incident**: the most recent incident reported for the lock.
 
 Every new entry or incident is recorded in the history and logbook of Home Assistant and can be used to trigger automations.
 
-The event is described as *category - detail - user*, for example `Opening - Key - Jane Doe`. Parts without a value are left out, so it can also be `Opening - Key` or just `Opening`. Incidents never include a user. The time of the event is shown in local time (`local_date_time`).
+The event is described as *category - detail - user*, for example `Opening - Offline - Jane Doe`. Parts without a value are left out, so it can also be `Opening - Jane Doe` or just `Opening`. Incidents never include a user. The time of the event is shown in local time (`local_date_time`).
 
 - Only entries and incidents that happen while Home Assistant is running are reported. After the integration is first added, each lock shows its most recent entry and incident.
 - By default, entries do **not** include who used the lock. To include the person's name, alias and picture, turn on *Include user details in entries* under *Configure* on the integration. This is personal data and is stored in your Home Assistant history; only turn it on if you are allowed to keep this information.
@@ -129,51 +131,6 @@ All other information Salto KS provides about your account, sites and locks is s
 Technical identifiers are disabled by default. To use one, open the entity settings and turn on *Enabled*.
 
 *Download diagnostics* on the integration gives all collected information, with credentials and personal data removed.
-
-## Notifications
-
-In order to be notified when one of the locks changes state, a simple automation can be created: 
-
-```yaml
-alias: Lock notifier
-description: ''
-triggers:
-  - trigger: state
-    entity_id:
-      - lock.front_door
-    to:
-      - locked
-      - unlocked
-    from:
-      - locking
-      - unlocking
-conditions: []
-actions:
-  - choose:
-      - conditions:
-          - condition: state
-            entity_id: lock.front_door
-            state:
-              - locked
-        sequence:
-          - metadata: {}
-            data:
-              title: State of Salto KS lock changed
-              message: Front door is now locked
-            action: notify.my_mobile
-      - conditions:
-          - condition: state
-            entity_id: lock.front_door
-            state:
-              - unlocked
-        sequence:
-          - metadata: {}
-            data:
-              title: State of Salto KS lock changed
-              message: Front door is now unlocked
-            action: notify.my_mobile
-mode: single
-```
 
 ## Please note
 
