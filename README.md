@@ -1,8 +1,8 @@
 # Unofficial Salto KS Custom Integration for Home Assistant
 
-First of all, like the name suggests, this is an *unofficial* Salto KS integration. It is not provided by or maintained by any Salto Systems or Salto Group related entity.
-
 This integration polls the Salto KS cloud API (configurable, default every 10 seconds) and exposes all information about the sites you are allowed to see with the account you are using and the locks within those sites you have access to.
+
+>Like the name suggests, this is an *unofficial* Salto KS integration. It is not provided by or maintained by any Salto Systems or Salto Group company.
 
 The locks are controlled via a feature in Salto KS called "remote opening". The account used for this integration must have the appropriate permission to perform remote openings. Since Salto KS is an always online real time cloud locking solution, this usually works pretty fast. However, in case there is an issue with connectivity, the operation might not work. If the unlock command could not be delivered, it will expire and become invalid within a few minutes. The integration will keep polling for lock state changes, so as soon as connectivity is restored, the correct state will be reflected.
 
