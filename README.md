@@ -11,17 +11,23 @@ The locks are controlled via a feature in Salto KS called "remote opening". The 
 1. *HACS* (or settings → marketplace) → three dots → *Custom repositories* → add `https://github.com/medivb/ha-salto-ks` as type *Integration*, then install **Salto KS**. Or copy `custom_components/saltoks` into your Home Assistant `config/custom_components/` folder.
 2. Restart Home Assistant.
 3. *Settings → Devices & services → Add integration → Salto KS*.
-4. Enter your username and password, and the client ID and client secret.
+4. Select *Open website* to go to the Salto KS login page, and sign in with the account you use for the Salto KS web app.
+5. After signing in you are sent back to Home Assistant through My Home Assistant (`my.home-assistant.io`). The first time, that page asks for the address of your Home Assistant.
 
 Update interval and other options: *Configure* on the integration (update interval 5–300 seconds, default 10).
 
 ## Sign-in
 
-- Use the username and password you normally use for the Salto KS web app (https://app.saltoks.com), together with the client ID and client secret you received as an integrator.
-- The client secret is stored in Home Assistant like your password. Do not share it, and remove it from screenshots and issue reports.
-- If you used an earlier version, where a single combined value was entered as client ID, it is converted to a separate client ID and client secret automatically.
-- The integration stays signed in on its own. If your credentials stop working (for example after a password change), Home Assistant asks you to sign in again.
-- Your session is kept in memory only.
+- You sign in on the normal Salto KS login page in your browser. Home Assistant never sees your password.
+- The login page always asks for your username and password, also when your browser is already signed in to Salto KS, so you choose which account Home Assistant uses. When signing in again, the account of the existing setup is filled in and another account is refused.
+- The first time, the login page asks you to allow the Salto KS integration access to your account.
+- Home Assistant only stores a sign-in token, which it renews on its own. No password or client secret is stored.
+- Any Salto KS account can be used; no separate client ID or client secret is needed.
+- If the sign-in expires or is revoked (for example after a password change), Home Assistant asks you to sign in again.
+
+### Switching from an earlier version
+
+Earlier versions signed in with a username, password, client ID and client secret that were stored in Home Assistant. Such a setup keeps working, but a repair appears under *Settings → System → Repairs*: *Switch … to the browser sign-in*. Select it and confirm, then follow the sign-in notification. After signing in, the stored password and client credentials are removed. Your devices, entities and settings stay as they are.
 
 ## Devices
 

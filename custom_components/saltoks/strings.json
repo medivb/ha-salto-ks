@@ -1,41 +1,31 @@
 {
   "config": {
     "step": {
-      "user": {
-        "title": "Salto KS",
-        "description": "Sign in with your Salto KS account and the client ID and client secret you received as an integrator.\n\nLast server response: {server_message}",
-        "data": {
-          "username": "Username",
-          "password": "Password",
-          "client_id": "Client ID",
-          "client_secret": "Client secret"
-        },
-        "data_description": {
-          "client_id": "The client ID you received as an integrator (not the base64 value).",
-          "client_secret": "The client secret that belongs to the client ID."
-        }
+      "pick_implementation": {
+        "title": "Choose a sign-in method"
       },
       "reauth_confirm": {
-        "title": "Re-authenticate Salto KS",
-        "description": "The stored credentials were rejected. Please enter them again.\n\nLast server response: {server_message}",
-        "data": {
-          "username": "Username",
-          "password": "Password",
-          "client_id": "Client ID",
-          "client_secret": "Client secret"
-        }
+        "title": "Sign in to Salto KS again",
+        "description": "Sign in again with your Salto KS account. You will be sent to the Salto KS login page, which always asks for your username and password, also when you are already signed in to Salto KS in this browser. Use the same account as before; another account is refused. After signing in, Home Assistant only stores a sign-in token; no password is saved."
       }
     },
-    "error": {
-      "invalid_auth": "Username or password rejected (invalid_grant). See the server response below.",
-      "invalid_client": "Client ID or client secret rejected (invalid_client). See the server response below.",
-      "unauthorized_client": "This client is not allowed to use the password grant (unauthorized_client).",
-      "cannot_connect": "Unable to reach the Salto KS services. See the server response below.",
-      "unknown": "Unexpected error."
-    },
     "abort": {
-      "already_configured": "This account is already configured.",
-      "reauth_successful": "Re-authentication was successful."
+      "already_configured": "This Salto KS account is already set up.",
+      "reauth_successful": "Signed in again successfully.",
+      "wrong_account": "You signed in with a different Salto KS account than the one this entry belongs to. Start again and sign in with the original account, or add the other account as a new entry.",
+      "cannot_connect": "Signed in, but the Salto KS account details could not be read. Please try again.",
+      "authorize_url_timeout": "Timed out while preparing the sign-in.",
+      "missing_configuration": "The sign-in for Salto KS is not available.",
+      "no_url_available": "No Home Assistant address is available for the sign-in. See {docs_url}.",
+      "oauth_error": "The Salto KS login returned an invalid response.",
+      "oauth_failed": "The sign-in could not be completed. Please try again.",
+      "oauth_timeout": "Timed out while completing the sign-in.",
+      "oauth_unauthorized": "The Salto KS login refused the sign-in.",
+      "oauth_implementation_unavailable": "The sign-in for Salto KS is not available right now.",
+      "user_rejected_authorize": "The sign-in was cancelled: {error}"
+    },
+    "create_entry": {
+      "default": "Signed in to Salto KS."
     }
   },
   "options": {
@@ -161,6 +151,19 @@
     "remove_easy_office_mode_schedule": {
       "name": "Remove Easy Office Mode schedule",
       "description": "Removes the Easy Office Mode schedule of one or more Salto KS locks. Locks without a schedule are skipped."
+    }
+  },
+  "issues": {
+    "switch_to_browser_sign_in": {
+      "title": "Switch {title} to the browser sign-in",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Switch to the browser sign-in",
+            "description": "{title} still signs in with a username, password, client ID and client secret that are stored in Home Assistant.\n\nWith the browser sign-in you log in on the Salto KS login page instead. Home Assistant then only keeps a sign-in token, and the stored password and client credentials are removed. Your devices, entities and settings stay as they are.\n\nSelect **Submit** to start. Home Assistant then shows a notification to sign in again; follow it to open the Salto KS login page."
+          }
+        }
+      }
     }
   }
 }

@@ -17,7 +17,19 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.saltoks.const import API_BASE_URL, DOMAIN, TOKEN_URL
 
+# Entry created with the browser sign-in (tokens only).
 ENTRY_DATA = {
+    "auth_implementation": "saltoks",
+    "token": {
+        "access_token": "tok1",
+        "refresh_token": "r1",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+        "expires_at": 4102444800,  # 2100-01-01: no refresh during tests
+    },
+}
+# Entry from an earlier version: username, password and client credentials.
+LEGACY_DATA = {
     "username": "user@example.com",
     "password": "pw",
     "client_id": "my-client",
@@ -80,11 +92,10 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
     entry = await _setup(hass)
     assert entry.state is ConfigEntryState.LOADED
 
-    # Token request: password grant with Basic client auth.
-    method, url, data, headers = aioclient_mock.mock_calls[0]
-    assert str(url) == TOKEN_URL
-    assert data["grant_type"] == "password"
-    assert headers["Authorization"].startswith("Basic ")
+    # Browser sign-in entry: the stored access token is used; no password grant.
+    assert not any(str(c[1]) == TOKEN_URL for c in aioclient_mock.mock_calls)
+    me_call = next(c for c in aioclient_mock.mock_calls if str(c[1]).endswith("/me"))
+    assert me_call[3]["Authorization"] == "Bearer tok1"
 
     devreg = dr.async_get(hass)
     account = devreg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
@@ -160,8 +171,9 @@ async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock)
 
 
 async def test_invalid_credentials_start_reauth(hass: HomeAssistant, aioclient_mock) -> None:
+    """Older entry with a password: rejected credentials start re-authentication."""
     _token(aioclient_mock, status=400)
-    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1")
+    entry = MockConfigEntry(domain=DOMAIN, data=LEGACY_DATA, unique_id="u1")
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -223,15 +235,6 @@ async def test_token_request_matches_manual_call(hass: HomeAssistant, aioclient_
     assert headers["Authorization"] == "Basic Q0xJRU5USUQ6U0VDUkVU"  # CLIENTID:SECRET
     assert headers["Content-Type"] == "application/x-www-form-urlencoded"
     assert data == {"grant_type": "password", "username": "a@b.c", "password": "pw"}
-
-
-async def test_config_flow_shows_server_error(hass: HomeAssistant, aioclient_mock) -> None:
-    aioclient_mock.post(TOKEN_URL, status=400,
-                        json={"error": "invalid_client", "error_description": "unknown client"})
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
-    assert result["errors"] == {"base": "invalid_client"}
-    assert result["description_placeholders"]["server_message"] == "invalid_client: unknown client"
 
 
 async def test_picture_urls_are_images_not_sensors(hass: HomeAssistant, aioclient_mock) -> None:
@@ -362,7 +365,6 @@ def test_detect_image_type() -> None:
     assert detect_image_type(b"????", "application/octet-stream", "https://x/a") is None
 
 
-
 def _lock_sequence(aioclient_mock, states: list[str]):
     """Mock GET /sites/s1/locks/l1 returning the given states in order
     (the last one repeats). Returns the list of served states."""
@@ -454,12 +456,6 @@ async def test_poll_interval_and_timeout_defaults(hass: HomeAssistant, aioclient
     assert confirmed is False
     assert sleeps == [1.0] * 10
     assert len(served) == 10
-
-
-async def test_setup_form_fields(hass: HomeAssistant) -> None:
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    assert {str(k) for k in result["data_schema"].schema} == {"username", "password", "client_id", "client_secret"}
-
 
 
 # ------------------------------------------------------------ Easy Office Mode
@@ -655,7 +651,6 @@ async def test_superseded_eom_sensors_removed(hass: HomeAssistant, aioclient_moc
     assert entreg.async_get(keep.entity_id) is not None
 
 
-
 def _deletes(aioclient_mock):
     return [str(c[1]) for c in aioclient_mock.mock_calls if c[0] == "DELETE"]
 
@@ -691,7 +686,6 @@ async def test_eom_remove_service_multiple_locks(hass: HomeAssistant, aioclient_
     assert hass.states.get(_eid(hass, entry, "date", "l1", "end_date")).state == "unknown"
 
 
-
 @pytest.mark.parametrize("returned", [None, ""])
 async def test_eom_indefinite_schedule(hass: HomeAssistant, aioclient_mock, returned) -> None:
     """A schedule without end date (returned as null or empty) is shown and kept as indefinite."""
@@ -712,7 +706,6 @@ async def test_eom_indefinite_schedule(hass: HomeAssistant, aioclient_mock, retu
                                    {"entity_id": _eid(hass, entry, "switch", "l1", "sunday")},
                                    blocking=True)
     assert _puts(aioclient_mock)[-1] == {**EOM, "sunday": True, "end_date": ""}
-
 
 
 # ------------------------------------------------------------------- entries
@@ -857,7 +850,6 @@ async def test_options_include_user_details(hass: HomeAssistant, aioclient_mock)
     assert entry.options["include_user_details"] is True
 
 
-
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [
@@ -941,7 +933,6 @@ async def test_event_types_are_bounded(hass: HomeAssistant, aioclient_mock, free
     assert f"Cat {MAX_EVENT_TYPES + 19} - Key" in types
 
 
-
 @pytest.mark.parametrize("prefix", ["", "Basic "])
 async def test_migration_splits_basic_value(hass: HomeAssistant, aioclient_mock, prefix) -> None:
     """Entries that stored base64("id:secret") in the client ID field are split."""
@@ -977,20 +968,253 @@ async def test_migration_keeps_unrecognised_client_id(hass: HomeAssistant, aiocl
     assert "client_secret" not in entry.data
 
 
-async def test_reauth_asks_for_client_credentials(hass: HomeAssistant, aioclient_mock) -> None:
+
+# ------------------------------------------------------- browser sign-in (PKCE)
+
+def _token_calls(aioclient_mock):
+    return [c for c in aioclient_mock.mock_calls if str(c[1]) == TOKEN_URL]
+
+
+async def _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result, me=None):
+    """Complete the external sign-in step of a flow that shows the login page."""
+    from yarl import URL
+
+    assert result["type"] == "external"
+    state = URL(result["url"]).query["state"]
+    client = await hass_client_no_auth()
+    resp = await client.get(f"/auth/external/callback?code=abcd&state={state}")
+    assert resp.status == 200
+    aioclient_mock.post(TOKEN_URL, json={
+        "access_token": "new-access", "refresh_token": "new-refresh", "expires_in": 3600,
+        "token_type": "Bearer", "id_token": "header.payload.signature",
+        "scope": "openid profile user_api.full_access offline_access",
+    })
+    _api(aioclient_mock, me=me)
+    return await hass.config_entries.flow.async_configure(result["flow_id"])
+
+
+async def test_browser_sign_in_creates_entry(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    import base64
+    import hashlib
+    from yarl import URL
+    from custom_components.saltoks.oauth import (
+        AUTHORIZE_URL, OAUTH_CLIENT_ID, OAUTH_SCOPES, REDIRECT_URI)
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    url = URL(result["url"])
+    assert str(url.with_query(None)) == AUTHORIZE_URL
+    query = url.query
+    assert query["response_type"] == "code"
+    assert query["client_id"] == OAUTH_CLIENT_ID == "6566f5da-839a-44bd-8a69-f862da174414"
+    assert query["redirect_uri"] == REDIRECT_URI == "https://my.home-assistant.io/redirect/oauth"
+    assert query["scope"] == OAUTH_SCOPES == "openid profile user_api.full_access offline_access"
+    assert query["code_challenge_method"] == "S256"
+    # Always ask for the account, even when the browser is already signed in.
+    assert query["prompt"] == "login"
+    assert "login_hint" not in query
+    challenge = query["code_challenge"]
+
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
+    assert result["type"] == "create_entry"
+    assert result["title"] == "Salto KS (t@example.com)"
+    assert result["result"].unique_id == "u1"
+    # Only tokens are stored: no username, password or client secret. The ID
+    # token is not kept either.
+    data = result["data"]
+    assert set(data) == {"auth_implementation", "token"}
+    assert data["token"]["access_token"] == "new-access"
+    assert data["token"]["refresh_token"] == "new-refresh"
+    assert "id_token" not in data["token"]
+
+    # Token request: public client with PKCE.
+    form = _token_calls(aioclient_mock)[0][2]
+    assert form["grant_type"] == "authorization_code"
+    assert form["code"] == "abcd"
+    assert form["client_id"] == OAUTH_CLIENT_ID
+    assert form["redirect_uri"] == REDIRECT_URI
+    assert "client_secret" not in form
+    verifier = form["code_verifier"]
+    assert 43 <= len(verifier) <= 128
+    expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    assert expected == challenge
+
+    await hass.async_block_till_done()
+    assert result["result"].state is ConfigEntryState.LOADED
+
+
+async def test_each_sign_in_gets_its_own_verifier(
+    hass: HomeAssistant, current_request_with_host
+) -> None:
+    from yarl import URL
+
+    first = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    second = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert (URL(first["url"]).query["code_challenge"]
+            != URL(second["url"]).query["code_challenge"])
+
+
+async def test_browser_sign_in_same_account_aborts(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1").add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
+
+
+async def test_legacy_entry_switches_to_browser_sign_in(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    from homeassistant.helpers import issue_registry as ir
+    from custom_components.saltoks import repairs
+
+    # Older entry: works with the stored password and shows a repair issue.
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=LEGACY_DATA, unique_id="u1",
+                            version=1, minor_version=4)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    issue_id = f"switch_to_browser_sign_in_{entry.entry_id}"
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    assert issue is not None and issue.is_fixable
+
+    # The repair starts the browser sign-in (re-authentication).
+    flow = await repairs.async_create_fix_flow(hass, issue_id, issue.data)
+    # Set by the repairs flow manager in Home Assistant.
+    flow.hass, flow.handler, flow.issue_id = hass, DOMAIN, issue_id
+    form = await flow.async_step_init()
+    assert form["description_placeholders"] == {"title": entry.title}
+    assert form["step_id"] == "confirm"
+    await flow.async_step_confirm({})
+    await hass.async_block_till_done()
+    reauth = [f for f in hass.config_entries.flow.async_progress()
+              if f["context"]["source"] == "reauth"]
+    assert len(reauth) == 1
+
+    result = await hass.config_entries.flow.async_configure(reauth[0]["flow_id"], {})
+    aioclient_mock.clear_requests()
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
+    assert result["type"] == "abort"
+    assert result["reason"] == "reauth_successful"
+    await hass.async_block_till_done()
+
+    # Password and client credentials are gone; only tokens remain.
+    assert set(entry.data) == {"auth_implementation", "token"}
+    assert entry.state is ConfigEntryState.LOADED
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
+async def test_reauth_with_other_account_aborts(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
     _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     result = await entry.start_reauth_flow(hass)
-    assert {str(k) for k in result["data_schema"].schema} == {
-        "username", "password", "client_id", "client_secret"}
+    assert result["step_id"] == "reauth_confirm"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    # The login page asks for the account and is pre-filled with this entry's account.
+    from yarl import URL
+    query = URL(result["url"]).query
+    assert query["prompt"] == "login"
+    assert query["login_hint"] == "t@example.com"
     aioclient_mock.clear_requests()
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result,
+                                    me={**ME, "id": "someone-else"})
+    assert result["type"] == "abort"
+    assert result["reason"] == "wrong_account"
+    assert entry.data["token"]["access_token"] == "tok1"
+
+
+async def test_expired_token_is_refreshed_without_reload(hass: HomeAssistant, aioclient_mock) -> None:
+    from custom_components.saltoks.oauth import OAUTH_CLIENT_ID
+
+    expired = {**ENTRY_DATA, "token": {**ENTRY_DATA["token"], "expires_at": 0}}
+    aioclient_mock.post(TOKEN_URL, json={
+        "access_token": "tok2", "refresh_token": "r2", "expires_in": 3600,
+        "token_type": "Bearer", "id_token": "x.y.z"})
+    _api(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=expired, unique_id="u1")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    form = _token_calls(aioclient_mock)[0][2]
+    assert form == {"grant_type": "refresh_token", "client_id": OAUTH_CLIENT_ID,
+                    "refresh_token": "r1"}
+    assert entry.data["token"]["access_token"] == "tok2"
+    assert entry.data["token"]["refresh_token"] == "r2"
+    assert "id_token" not in entry.data["token"]
+    me_call = next(c for c in aioclient_mock.mock_calls if str(c[1]).endswith("/me"))
+    assert me_call[3]["Authorization"] == "Bearer tok2"
+    # Storing the new token must not reload the integration.
+    assert entry.state is ConfigEntryState.LOADED
+    coordinator = entry.runtime_data
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, "token": {**entry.data["token"], "access_token": "tok3"}})
+    await hass.async_block_till_done()
+    assert entry.runtime_data is coordinator
+
+
+async def test_refresh_rejected_starts_reauth(hass: HomeAssistant, aioclient_mock) -> None:
+    expired = {**ENTRY_DATA, "token": {**ENTRY_DATA["token"], "expires_at": 0}}
+    aioclient_mock.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
+    _api(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, data=expired, unique_id="u1")
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert any(f["context"]["source"] == "reauth"
+               for f in hass.config_entries.flow.async_progress())
+
+
+async def test_api_401_refreshes_token_and_retries(hass: HomeAssistant, aioclient_mock) -> None:
+    from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMockResponse
+
+    calls = {"me": 0}
+
+    async def me_handler(method, url, data):
+        calls["me"] += 1
+        if calls["me"] == 1:
+            return AiohttpClientMockResponse(method, url, status=401, text="")
+        return AiohttpClientMockResponse(method, url, status=200, text=json.dumps(ME))
+
+    aioclient_mock.post(TOKEN_URL, json={
+        "access_token": "tok2", "refresh_token": "r2", "expires_in": 3600, "token_type": "Bearer"})
+    aioclient_mock.get(f"{API_BASE_URL}/me", side_effect=me_handler)
+    aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
+    aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=LOCKS)
+    aioclient_mock.get(ENTRIES_URL, json={"items": []})
+    aioclient_mock.get(INCIDENTS_URL, json={"items": []})
+    entry = await _setup(hass)
+    assert entry.state is ConfigEntryState.LOADED
+    assert len(_token_calls(aioclient_mock)) == 1
+    assert entry.data["token"]["access_token"] == "tok2"
+
+
+async def test_options_change_reloads(hass: HomeAssistant, aioclient_mock) -> None:
     _token(aioclient_mock)
     _api(aioclient_mock)
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {
-        "username": "user@example.com", "password": "pw2",
-        "client_id": "new-client", "client_secret": "new-secret"})
+    entry = await _setup(hass)
+    coordinator = entry.runtime_data
+    hass.config_entries.async_update_entry(entry, options={"scan_interval": 30})
     await hass.async_block_till_done()
-    assert result["reason"] == "reauth_successful"
-    assert entry.data["client_id"] == "new-client"
-    assert entry.data["client_secret"] == "new-secret"
+    assert entry.runtime_data is not coordinator
+
+
+async def test_diagnostics_redacts_tokens(hass: HomeAssistant, aioclient_mock) -> None:
+    from custom_components.saltoks.diagnostics import async_get_config_entry_diagnostics
+
+    _token(aioclient_mock)
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["entry"]["token"] == "**REDACTED**"
+    assert "tok1" not in json.dumps(diag)
