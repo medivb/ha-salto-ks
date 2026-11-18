@@ -20,6 +20,8 @@ Update interval and other options: *Configure* on the integration (update interv
 
 - You sign in on the normal Salto KS login page in your browser. Home Assistant never sees your password.
 - The login page always asks for your username and password, also when your browser is already signed in to Salto KS, so you choose which account Home Assistant uses. When signing in again, the account of the existing setup is filled in and another account is refused.
+  
+  ![Salto KS login screen](./img/login_screen_small.png)
 - The first time, the login page asks you to allow the Salto KS integration access to your account.
 - Home Assistant only stores a sign-in token, which it renews on its own. No password or client secret is stored.
 - Any Salto KS account can be used; no separate client ID or client secret is needed.
