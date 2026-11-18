@@ -281,3 +281,58 @@ class SaltoKSClient:
             f"/sites/{site_id}/locks/{lock_id}/locking",
             json_body={"locked_state": state},
         )
+
+
+class SaltoKSTokenClient(SaltoKSClient):
+    """API client that uses tokens from the browser sign-in.
+
+    ``oauth_session`` is Home Assistant's OAuth2Session: it refreshes the
+    access token with the refresh token and stores the new tokens in the
+    config entry. No username, password or client secret is involved.
+    """
+
+    def __init__(self, session: aiohttp.ClientSession, oauth_session: Any) -> None:
+        self._session = session
+        self._oauth = oauth_session
+
+    async def async_get_access_token(self) -> str:
+        try:
+            await self._oauth.async_ensure_token_valid()
+        except aiohttp.ClientResponseError as err:
+            if err.status in (400, 401):
+                raise SaltoKSAuthError(
+                    "Sign-in expired or was revoked; sign in again", str(err.status)
+                ) from err
+            raise SaltoKSApiError(f"Token refresh failed: HTTP {err.status}") from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise SaltoKSApiError(f"Token refresh failed: {err}") from err
+        return str(self._oauth.token["access_token"])
+
+    def invalidate_access_token(self) -> None:
+        """Mark the stored access token as expired so the next request
+        refreshes it (used after a 401 from the API)."""
+        entry = self._oauth.config_entry
+        token = {**entry.data["token"], "expires_at": 0}
+        self._oauth.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, "token": token}
+        )
+
+    async def async_authenticate(self) -> None:
+        await self.async_get_access_token()
+
+
+class SaltoKSAccessTokenClient(SaltoKSClient):
+    """API client for a single access token (used during sign-in)."""
+
+    def __init__(self, session: aiohttp.ClientSession, access_token: str) -> None:
+        self._session = session
+        self._access_token_value = access_token
+
+    async def async_get_access_token(self) -> str:
+        return self._access_token_value
+
+    def invalidate_access_token(self) -> None:
+        """Nothing to renew; a second 401 is reported as an error."""
+
+    async def async_authenticate(self) -> None:
+        """The access token was just issued."""

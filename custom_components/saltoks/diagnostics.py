@@ -17,6 +17,8 @@ TO_REDACT = {
     CONF_PASSWORD,
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
+    "token",
+    "id_token",
     "access_token",
     "refresh_token",
     "email",

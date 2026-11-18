@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import base64
 
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import CONF_PASSWORD, CONF_TOKEN, CONF_USERNAME, Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    config_entry_oauth2_flow,
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import SaltoKSClient
+from .api import SaltoKSClient, SaltoKSTokenClient
 from .const import CONF_CLIENT_ID, CONF_CLIENT_SECRET, DOMAIN
+from .oauth import async_register_oauth
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
 from .entity import (
     account_name,
@@ -36,13 +42,39 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> bool:
     """Set up Salto KS from a config entry."""
-    client = SaltoKSClient(
-        async_get_clientsession(hass),
-        entry.data[CONF_USERNAME],
-        entry.data[CONF_PASSWORD],
-        entry.data[CONF_CLIENT_ID],
-        entry.data.get(CONF_CLIENT_SECRET, ""),
-    )
+    session = async_get_clientsession(hass)
+    client: SaltoKSClient
+    if CONF_TOKEN in entry.data:
+        # Browser sign-in: only tokens are stored.
+        async_register_oauth(hass)
+        implementation = (
+            await config_entry_oauth2_flow.async_get_config_entry_implementation(hass, entry)
+        )
+        client = SaltoKSTokenClient(
+            session, config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
+        )
+        ir.async_delete_issue(hass, DOMAIN, _legacy_issue_id(entry))
+    else:
+        # Entry from an earlier version: username, password and client
+        # credentials. Keeps working; a repair suggests the browser sign-in.
+        client = SaltoKSClient(
+            session,
+            entry.data[CONF_USERNAME],
+            entry.data[CONF_PASSWORD],
+            entry.data[CONF_CLIENT_ID],
+            entry.data.get(CONF_CLIENT_SECRET, ""),
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            _legacy_issue_id(entry),
+            is_fixable=True,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="switch_to_browser_sign_in",
+            translation_placeholders={"title": entry.title},
+            data={"entry_id": entry.entry_id},
+        )
     coordinator = SaltoKSCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
@@ -75,7 +107,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
     _remove_superseded_entities(hass, entry)
 
     entry.async_on_unload(coordinator.async_add_listener(_sync_device_names))
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+    # Reload only when the options change. The entry data also changes when
+    # tokens are refreshed, which must not reload the integration.
+    options = dict(entry.options)
+
+    async def _async_options_updated(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
+        if dict(entry.options) != options:
+            await hass.config_entries.async_reload(entry.entry_id)
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -157,8 +197,13 @@ def split_basic_value(value: str) -> tuple[str, str] | None:
     return client_id, client_secret
 
 
-async def _async_reload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
-    await hass.config_entries.async_reload(entry.entry_id)
+def _legacy_issue_id(entry: SaltoKSConfigEntry) -> str:
+    return f"switch_to_browser_sign_in_{entry.entry_id}"
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
+    """Remove the repair issue of an entry that is deleted."""
+    ir.async_delete_issue(hass, DOMAIN, _legacy_issue_id(entry))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> bool:

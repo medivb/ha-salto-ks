@@ -1,14 +1,20 @@
 {
   "domain": "saltoks",
   "name": "Salto KS",
-  "categories": ["security_safety.locks_access"],
-  "codeowners": ["@medivb"],
+  "categories": [
+    "security_safety.locks_access"
+  ],
+  "codeowners": [
+    "@medivb"
+  ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "auth"
+  ],
   "documentation": "https://github.com/medivb/ha-salto-ks",
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/medivb/ha-salto-ks/issues",
   "requirements": [],
-  "version": "1.4.0"
+  "version": "1.5.0"
 }
