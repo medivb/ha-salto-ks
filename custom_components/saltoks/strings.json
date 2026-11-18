@@ -6,13 +6,13 @@
       },
       "reauth_confirm": {
         "title": "Sign in to Salto KS again",
-        "description": "Sign in again with your Salto KS account. You will be sent to the Salto KS login page in your browser. After signing in, Home Assistant only stores a sign-in token; no password is saved."
+        "description": "Sign in again with your Salto KS account. You will be sent to the Salto KS login page, which always asks for your username and password, also when you are already signed in to Salto KS in this browser. Use the same account as before; another account is refused. After signing in, Home Assistant only stores a sign-in token; no password is saved."
       }
     },
     "abort": {
       "already_configured": "This Salto KS account is already set up.",
       "reauth_successful": "Signed in again successfully.",
-      "wrong_account": "You signed in with a different Salto KS account than the one this entry belongs to.",
+      "wrong_account": "You signed in with a different Salto KS account than the one this entry belongs to. Start again and sign in with the original account, or add the other account as a new entry.",
       "cannot_connect": "Signed in, but the Salto KS account details could not be read. Please try again.",
       "authorize_url_timeout": "Timed out while preparing the sign-in.",
       "missing_configuration": "The sign-in for Salto KS is not available.",

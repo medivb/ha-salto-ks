@@ -1011,6 +1011,9 @@ async def test_browser_sign_in_creates_entry(
     assert query["redirect_uri"] == REDIRECT_URI == "https://my.home-assistant.io/redirect/oauth"
     assert query["scope"] == OAUTH_SCOPES == "openid profile user_api.full_access offline_access"
     assert query["code_challenge_method"] == "S256"
+    # Always ask for the account, even when the browser is already signed in.
+    assert query["prompt"] == "login"
+    assert "login_hint" not in query
     challenge = query["code_challenge"]
 
     result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
@@ -1116,6 +1119,11 @@ async def test_reauth_with_other_account_aborts(
     result = await entry.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    # The login page asks for the account and is pre-filled with this entry's account.
+    from yarl import URL
+    query = URL(result["url"]).query
+    assert query["prompt"] == "login"
+    assert query["login_hint"] == "t@example.com"
     aioclient_mock.clear_requests()
     result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result,
                                     me={**ME, "id": "someone-else"})

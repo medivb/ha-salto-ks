@@ -9,6 +9,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlow
+from homeassistant.const import CONF_USERNAME
 from homeassistant.core import callback
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -39,15 +40,26 @@ class SaltoKSConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, doma
     VERSION = 1
     MINOR_VERSION = 4
 
+    _login_hint: str | None = None
+
     @property
     def logger(self) -> logging.Logger:
         return _LOGGER
+
+    @property
+    def extra_authorize_data(self) -> dict[str, Any]:
+        # On re-authentication, pre-fill the account this entry belongs to.
+        return {"login_hint": self._login_hint} if self._login_hint else {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         async_register_oauth(self.hass)
         return await super().async_step_user(user_input)
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        entry = self._get_reauth_entry()
+        coordinator = getattr(entry, "runtime_data", None)
+        me = coordinator.data.me if coordinator and coordinator.data else {}
+        self._login_hint = str(me.get("email") or entry_data.get(CONF_USERNAME) or "") or None
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(

@@ -25,6 +25,10 @@ AUTHORIZE_URL = "https://identity.eu.my-clay.com/connect/authorize"
 OAUTH_CLIENT_ID = "6566f5da-839a-44bd-8a69-f862da174414"
 # offline_access: a refresh token, so the user stays signed in.
 OAUTH_SCOPES = "openid profile user_api.full_access offline_access"
+# Always ask for the username and password, also when the browser is still
+# signed in to Salto KS (possibly with another account), so the user decides
+# which account Home Assistant uses.
+OAUTH_PROMPT = "login"
 # The only redirect address registered for the client; it is the same for
 # every installation and forwards the browser to the user's own instance.
 REDIRECT_URI = "https://my.home-assistant.io/redirect/oauth"
@@ -77,6 +81,7 @@ class SaltoKSOAuth2Implementation(config_entry_oauth2_flow.LocalOAuth2Implementa
                     "scope": OAUTH_SCOPES,
                     "code_challenge": _code_challenge(verifier),
                     "code_challenge_method": "S256",
+                    "prompt": OAUTH_PROMPT,
                 }
             )
         )
