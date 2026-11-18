@@ -27,7 +27,7 @@ Update interval and other options: *Configure* on the integration (update interv
   ![IDS permission screen](./img/allow_account_access_small.png)
 - After this, Home Assistant asks you once for permission to allow the call-back to your installation. 
   
-  ![IDS permission screen](./img/allow_home_assistant_small.png)
+  ![HA permission screen](./img/allow_home_assistant_small.png)
 - Home Assistant only stores a sign-in token, which it renews on its own. No password or client secret is stored.
 - Any Salto KS account can be used; no separate client ID or client secret is needed.
 - If the sign-in expires or is revoked (for example after a password change), Home Assistant asks you to sign in again.
