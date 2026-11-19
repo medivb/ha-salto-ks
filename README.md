@@ -19,7 +19,7 @@ Update interval and other options: *Configure* on the integration (update interv
 ## Sign-in
 
 - You sign in on the normal Salto KS login page in your browser. Home Assistant never sees your password.
-- The login page always asks for your username and password, also when your browser is already signed in to Salto KS, so you choose which account Home Assistant uses. When signing in again, the account of the existing setup is filled in and another account is refused.
+- The login page always asks for your username and password, also when your browser is already signed in to Salto KS, so you choose which account Home Assistant uses. When signing in again, the account of the existing setup is filled in and another account is refused; to use another account, see [Switching to another account](#switching-to-another-account).
   
   ![Salto KS login screen](./img/login_screen_small.png)
 - The first time, the login page asks you to allow the Salto KS integration access to your account.
@@ -32,9 +32,18 @@ Update interval and other options: *Configure* on the integration (update interv
 - Any Salto KS account can be used; no separate client ID or client secret is needed.
 - If the sign-in expires or is revoked (for example after a password change), Home Assistant asks you to sign in again.
 
-### Switching from an earlier version
+### Switching to another account
 
-Earlier versions signed in with a username, password, client ID and client secret that were stored in Home Assistant. Such a setup keeps working, but a repair appears under *Settings → System → Repairs*: *Switch … to the browser sign-in*. Select it and confirm, then follow the sign-in notification. After signing in, the stored password and client credentials are removed. Your devices, entities and settings stay as they are.
+Choose *Reconfigure* on the integration (*Settings → Devices & services → Salto KS*, three dots) to sign in with a different Salto KS account. Home Assistant first explains the consequences, then opens the Salto KS login page.
+
+After switching:
+
+- sites and locks that the new account can access keep working as before, including their history;
+- sites and locks that the new account cannot access become *unavailable*; you can remove those devices on their device page;
+- sites and locks that only the new account can access are added;
+- a new account device is created, and the device of the previous account becomes *unavailable* (you can remove it).
+
+Locking, unlocking and Easy Office Mode changes depend on the permissions of the new account. An account that is already set up as a separate integration entry cannot be selected.
 
 ## Devices
 

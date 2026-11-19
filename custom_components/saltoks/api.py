@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
 import logging
-import time
 from typing import Any
 
 import aiohttp
 
-from .const import API_BASE_URL, FEED_URLS, TOKEN_EXPIRY_MARGIN, TOKEN_URL
+from .const import API_BASE_URL, FEED_URLS
 
 _LOGGER = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=20)
-AUTH_ERRORS = {"invalid_grant", "invalid_client", "unauthorized_client"}
 NEXT_LINK_KEYS = ("next_page_link", "nextPageLink", "@odata.nextLink", "next")
 MAX_PAGES = 50
 
@@ -26,7 +22,7 @@ class SaltoKSError(Exception):
 
 
 class SaltoKSAuthError(SaltoKSError):
-    """Credentials were rejected; user interaction is required."""
+    """The sign-in was rejected or expired; the user must sign in again."""
 
     def __init__(self, message: str, error: str = "", description: str = "") -> None:
         super().__init__(message)
@@ -39,134 +35,20 @@ class SaltoKSApiError(SaltoKSError):
 
 
 class SaltoKSClient:
-    """Salto KS API client with automatic token keep-alive.
+    """Salto KS API client.
 
-    Token strategy:
-      1. Re-use the access token while it is valid (minus a safety margin).
-      2. Otherwise use the refresh token (grant_type=refresh_token).
-      3. If refreshing fails, authenticate again with the stored credentials
-         (grant_type=password).
-      4. If that fails with an OAuth credential error, raise SaltoKSAuthError.
-    A 401 from the API invalidates the access token and retries once.
+    Subclasses provide the access token. A 401 from the API invalidates the
+    access token and the request is retried once.
     """
 
-    def __init__(
-        self,
-        session: aiohttp.ClientSession,
-        username: str,
-        password: str,
-        client_id: str,
-        client_secret: str = "",
-    ) -> None:
+    def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
-        self._username = username.strip()
-        self._password = password
-        self._client_id = client_id.strip()
-        self._client_secret = client_secret.strip()
-        self._access_token: str | None = None
-        self._refresh_token: str | None = None
-        self._expires_at = 0.0
-        self._token_lock = asyncio.Lock()
-
-    # ------------------------------------------------------------------ auth
-
-    @property
-    def _basic_auth(self) -> str:
-        """Client authentication for the token endpoint:
-        ``Basic base64(client_id:client_secret)``."""
-        raw = f"{self._client_id}:{self._client_secret}".encode()
-        return "Basic " + base64.b64encode(raw).decode()
-
-    def invalidate_access_token(self) -> None:
-        """Force the next request to obtain a new access token."""
-        self._access_token = None
-        self._expires_at = 0.0
-
-    async def _token_request(self, form: dict[str, str]) -> None:
-        headers = {
-            "Authorization": self._basic_auth,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
-        try:
-            async with self._session.post(
-                TOKEN_URL, data=form, headers=headers, timeout=REQUEST_TIMEOUT
-            ) as resp:
-                text = await resp.text()
-                status = resp.status
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise SaltoKSApiError(f"Token endpoint unreachable: {err}") from err
-
-        try:
-            payload: dict[str, Any] = json.loads(text) if text else {}
-        except ValueError:
-            payload = {}
-
-        if status >= 400:
-            error = str(payload.get("error", ""))
-            description = str(payload.get("error_description", ""))
-            _LOGGER.debug(
-                "Token endpoint (%s) returned HTTP %s: error=%s description=%s",
-                form.get("grant_type"), status, error or "-", description or text[:200],
-            )
-            if status in (400, 401) and (error in AUTH_ERRORS or status == 401):
-                raise SaltoKSAuthError(
-                    f"Authentication rejected ({error or status}"
-                    f"{': ' + description if description else ''})",
-                    error or str(status),
-                    description,
-                )
-            raise SaltoKSApiError(f"Token endpoint returned HTTP {status}: {error or text[:200]}")
-
-        token = payload.get("access_token")
-        if not token:
-            raise SaltoKSApiError("Token endpoint returned no access_token")
-
-        self._access_token = token
-        # Some servers do not rotate refresh tokens; keep the previous one then.
-        self._refresh_token = payload.get("refresh_token") or self._refresh_token
-        expires_in = float(payload.get("expires_in") or 3600)
-        self._expires_at = time.monotonic() + expires_in
-
-    async def _password_grant(self) -> None:
-        _LOGGER.debug("Authenticating with password grant")
-        self._refresh_token = None
-        form = {
-            "grant_type": "password",
-            "username": self._username,
-            "password": self._password,
-        }
-        await self._token_request(form)
-
-    async def _refresh_grant(self) -> None:
-        _LOGGER.debug("Refreshing access token")
-        await self._token_request(
-            {"grant_type": "refresh_token", "refresh_token": self._refresh_token or ""}
-        )
 
     async def async_get_access_token(self) -> str:
-        """Return a valid access token, refreshing or re-authenticating as needed."""
-        async with self._token_lock:
-            if self._access_token and time.monotonic() < (
-                self._expires_at - TOKEN_EXPIRY_MARGIN
-            ):
-                return self._access_token
+        raise NotImplementedError
 
-            if self._refresh_token:
-                try:
-                    await self._refresh_grant()
-                    return self._access_token  # type: ignore[return-value]
-                except SaltoKSAuthError:
-                    _LOGGER.debug("Refresh token rejected; falling back to password grant")
-                    self._refresh_token = None
-
-            await self._password_grant()
-            return self._access_token  # type: ignore[return-value]
-
-    async def async_authenticate(self) -> None:
-        """Perform a fresh password grant (used by the config flow)."""
-        async with self._token_lock:
-            await self._password_grant()
+    def invalidate_access_token(self) -> None:
+        raise NotImplementedError
 
     # ------------------------------------------------------------------- api
 
@@ -288,11 +170,11 @@ class SaltoKSTokenClient(SaltoKSClient):
 
     ``oauth_session`` is Home Assistant's OAuth2Session: it refreshes the
     access token with the refresh token and stores the new tokens in the
-    config entry. No username, password or client secret is involved.
+    config entry.
     """
 
     def __init__(self, session: aiohttp.ClientSession, oauth_session: Any) -> None:
-        self._session = session
+        super().__init__(session)
         self._oauth = oauth_session
 
     async def async_get_access_token(self) -> str:
@@ -317,15 +199,12 @@ class SaltoKSTokenClient(SaltoKSClient):
             entry, data={**entry.data, "token": token}
         )
 
-    async def async_authenticate(self) -> None:
-        await self.async_get_access_token()
-
 
 class SaltoKSAccessTokenClient(SaltoKSClient):
     """API client for a single access token (used during sign-in)."""
 
     def __init__(self, session: aiohttp.ClientSession, access_token: str) -> None:
-        self._session = session
+        super().__init__(session)
         self._access_token_value = access_token
 
     async def async_get_access_token(self) -> str:
@@ -333,6 +212,3 @@ class SaltoKSAccessTokenClient(SaltoKSClient):
 
     def invalidate_access_token(self) -> None:
         """Nothing to renew; a second 401 is reported as an error."""
-
-    async def async_authenticate(self) -> None:
-        """The access token was just issued."""

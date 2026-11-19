@@ -28,13 +28,6 @@ ENTRY_DATA = {
         "expires_at": 4102444800,  # 2100-01-01: no refresh during tests
     },
 }
-# Entry from an earlier version: username, password and client credentials.
-LEGACY_DATA = {
-    "username": "user@example.com",
-    "password": "pw",
-    "client_id": "my-client",
-    "client_secret": "my-secret",
-}
 
 ME = {"id": "u1", "first_name": "Test", "last_name": "User", "email": "t@example.com",
       "image_url": "https://img.example.com/u1.png", "language": "en"}
@@ -60,12 +53,6 @@ def fast_lock_confirmation(monkeypatch):
     monkeypatch.setattr(const, "LOCK_CONFIRM_TIMEOUT", 0.2)
 
 
-def _token(aioclient_mock, status=200, access="tok1"):
-    body = ({"access_token": access, "refresh_token": "r1", "expires_in": 3600}
-            if status == 200 else {"error": "invalid_grant"})
-    aioclient_mock.post(TOKEN_URL, status=status, json=body)
-
-
 ENTRIES_URL = "https://connect.saltoks.com/v1.1/sites/s1/entries"
 INCIDENTS_URL = "https://connect.saltoks.com/v1.1/sites/s1/incidents"
 
@@ -87,7 +74,6 @@ async def _setup(hass: HomeAssistant) -> MockConfigEntry:
 
 
 async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     assert entry.state is ConfigEntryState.LOADED
@@ -98,7 +84,7 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
     assert me_call[3]["Authorization"] == "Bearer tok1"
 
     devreg = dr.async_get(hass)
-    account = devreg.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    account = devreg.async_get_device(identifiers={(DOMAIN, "account_u1")})
     site = devreg.async_get_device(identifiers={(DOMAIN, "site_s1")})
     assert account.name == "Test User"
     assert site.name == "HQ Amsterdam"
@@ -113,14 +99,14 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
     assert entreg.async_get(lock_id).device_id == lock_dev.id
     assert hass.states.get(lock_id).attributes["friendly_name"] == "Front door"
 
-    image_id = entreg.async_get_entity_id("image", DOMAIN, f"{entry.entry_id}_profile_image")
+    image_id = entreg.async_get_entity_id("image", DOMAIN, f"{entry.entry_id}_account_u1_profile_image")
     assert entreg.async_get(image_id).device_id == account.id
     assert hass.states.get(image_id).state != "unavailable"
 
     # Metadata entities.
     def uid(x):
         return f"{entry.entry_id}_{x}"
-    lang = entreg.async_get_entity_id("sensor", DOMAIN, uid("me__language"))
+    lang = entreg.async_get_entity_id("sensor", DOMAIN, uid("account_u1__language"))
     assert hass.states.get(lang).state == "en"
     tz = entreg.async_get_entity_id("sensor", DOMAIN, uid("site_s1__timezone"))
     assert hass.states.get(tz).state == "Europe/Amsterdam"
@@ -137,7 +123,6 @@ async def test_setup_devices_and_entities(hass: HomeAssistant, aioclient_mock) -
 
 
 async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     lock_id = er.async_get(hass).async_get_entity_id(
@@ -148,7 +133,6 @@ async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock)
     # After unlocking, the API reports office_mode and a brand-new field.
     unlocked = [{**LOCKS[0], "locked_state": "office_mode", "firmware": "1.2.3"}]
     aioclient_mock.clear_requests()
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=unlocked)
     aioclient_mock.patch(patch_url, json={})
     aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks/l1", json=unlocked[0])
@@ -170,10 +154,9 @@ async def test_lock_unlock_and_new_metadata(hass: HomeAssistant, aioclient_mock)
     assert patch_calls[-1][2] == {"locked_state": "locked"}
 
 
-async def test_invalid_credentials_start_reauth(hass: HomeAssistant, aioclient_mock) -> None:
-    """Older entry with a password: rejected credentials start re-authentication."""
-    _token(aioclient_mock, status=400)
-    entry = MockConfigEntry(domain=DOMAIN, data=LEGACY_DATA, unique_id="u1")
+async def test_entry_without_token_starts_reauth(hass: HomeAssistant, aioclient_mock) -> None:
+    """An entry without a sign-in token asks to sign in again in the browser."""
+    entry = MockConfigEntry(domain=DOMAIN, data={"auth_implementation": DOMAIN}, unique_id="u1")
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -182,75 +165,19 @@ async def test_invalid_credentials_start_reauth(hass: HomeAssistant, aioclient_m
     assert any(f["context"]["source"] == "reauth" for f in flows)
 
 
-async def test_client_token_lifecycle(hass: HomeAssistant, aioclient_mock) -> None:
-    """Refresh grant on expiry, password grant when refresh is rejected, retry on 401."""
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
-    from custom_components.saltoks.api import SaltoKSClient
-
-    client = SaltoKSClient(async_get_clientsession(hass), "u", "p", "c")
-    _token(aioclient_mock)
-    await client.async_get_access_token()
-    assert aioclient_mock.mock_calls[-1][2]["grant_type"] == "password"
-
-    client._expires_at = 0  # simulate expiry
-    await client.async_get_access_token()
-    assert aioclient_mock.mock_calls[-1][2]["grant_type"] == "refresh_token"
-
-    # Refresh rejected -> password grant.
-    aioclient_mock.clear_requests()
-    calls = []
-
-    async def token_handler(method, url, data):
-        calls.append(data["grant_type"])
-        from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMockResponse
-        if data["grant_type"] == "refresh_token":
-            return AiohttpClientMockResponse(method, url, status=400,
-                                             text=json.dumps({"error": "invalid_grant"}))
-        return AiohttpClientMockResponse(method, url, status=200, text=json.dumps(
-            {"access_token": "tok2", "refresh_token": "r2", "expires_in": 3600}))
-
-    aioclient_mock.post(TOKEN_URL, side_effect=token_handler)
-    client._expires_at = 0
-    assert await client.async_get_access_token() == "tok2"
-    assert calls == ["refresh_token", "password"]
-
-
-def test_basic_auth_formats() -> None:
-    import base64
-    from custom_components.saltoks.api import SaltoKSClient
-
-    expected = "Basic " + base64.b64encode(b"my-client:s3cr+t/=").decode()
-    assert SaltoKSClient(None, "u", "p", "my-client", "s3cr+t/=")._basic_auth == expected
-    assert SaltoKSClient(None, "u", "p", " my-client ", " s3cr+t/= ")._basic_auth == expected
-
-
-async def test_token_request_matches_manual_call(hass: HomeAssistant, aioclient_mock) -> None:
-    from homeassistant.helpers.aiohttp_client import async_get_clientsession
-    from custom_components.saltoks.api import SaltoKSClient
-
-    _token(aioclient_mock)
-    client = SaltoKSClient(async_get_clientsession(hass), "a@b.c", "pw", "CLIENTID", "SECRET")
-    await client.async_authenticate()
-    _, url, data, headers = aioclient_mock.mock_calls[-1]
-    assert headers["Authorization"] == "Basic Q0xJRU5USUQ6U0VDUkVU"  # CLIENTID:SECRET
-    assert headers["Content-Type"] == "application/x-www-form-urlencoded"
-    assert data == {"grant_type": "password", "username": "a@b.c", "password": "pw"}
-
-
 async def test_picture_urls_are_images_not_sensors(hass: HomeAssistant, aioclient_mock) -> None:
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1")
     entry.add_to_hass(hass)
     entreg = er.async_get(hass)
     # Sensors created for picture URLs by an earlier version must be removed.
-    for uid in ("me__image_url", "site_s1__owner.image_url"):
+    for uid in ("account_u1__image_url", "site_s1__owner.image_url"):
         entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_{uid}",
                                    config_entry=entry)
-    _token(aioclient_mock)
     _api(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    for uid in ("me__image_url", "site_s1__owner.image_url"):
+    for uid in ("account_u1__image_url", "site_s1__owner.image_url"):
         assert entreg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{uid}") is None
     # Other owner fields stay sensors.
     assert entreg.async_get_entity_id(
@@ -266,16 +193,15 @@ async def test_picture_urls_are_images_not_sensors(hass: HomeAssistant, aioclien
 
     # The profile image on the account device is unchanged.
     assert entreg.async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_profile_image") is not None
+        "image", DOMAIN, f"{entry.entry_id}_account_u1_profile_image") is not None
     assert entreg.async_get_entity_id(
-        "image", DOMAIN, f"{entry.entry_id}_me__image_url") is None
+        "image", DOMAIN, f"{entry.entry_id}_account_u1__image_url") is None
 
     # A changed URL updates the picture timestamp.
     before = state.state
     new_sites = {"items": [{**SITES["items"][0],
                             "owner": {"first_name": "Owner", "image_url": "https://img.example.com/o2.png"}}]}
     aioclient_mock.clear_requests()
-    _token(aioclient_mock)
     aioclient_mock.get(f"{API_BASE_URL}/me", json=ME)
     aioclient_mock.get(f"{API_BASE_URL}/sites", json=new_sites)
     aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=LOCKS)
@@ -285,7 +211,6 @@ async def test_picture_urls_are_images_not_sensors(hass: HomeAssistant, aioclien
 
 
 async def test_id_entities_disabled_by_default(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     entreg = er.async_get(hass)
@@ -293,10 +218,10 @@ async def test_id_entities_disabled_by_default(hass: HomeAssistant, aioclient_mo
     def reg(uid):
         return entreg.async_get(entreg.async_get_entity_id("sensor", DOMAIN, f"{entry.entry_id}_{uid}"))
 
-    for uid in ("me__id", "site_s1__id", "lock_s1_l1__id"):
+    for uid in ("account_u1__id", "site_s1__id", "lock_s1_l1__id"):
         assert reg(uid).disabled_by is er.RegistryEntryDisabler.INTEGRATION
         assert reg(uid).hidden_by is None
-    for uid in ("me__language", "site_s1__timezone", "site_s1__owner.first_name"):
+    for uid in ("account_u1__language", "site_s1__timezone", "site_s1__owner.first_name"):
         assert reg(uid).disabled_by is None
 
 
@@ -313,12 +238,11 @@ async def test_migration_disables_existing_id_entities(
                                         config_entry=entry, hidden_by=hidden)
     old_tz = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_site_s1__timezone",
                                         config_entry=entry)
-    _token(aioclient_mock)
     _api(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
-    assert entry.minor_version == 4
+    assert entry.minor_version == 5
     migrated = entreg.async_get(old_id.entity_id)
     assert migrated.disabled_by is er.RegistryEntryDisabler.INTEGRATION
     assert migrated.hidden_by is None
@@ -341,7 +265,6 @@ async def test_picture_served_as_octet_stream(hass: HomeAssistant, aioclient_moc
     """Azure Blob Storage serves pictures as application/octet-stream."""
     import respx
 
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     owner_img = er.async_get(hass).async_get_entity_id(
@@ -383,7 +306,6 @@ def _lock_sequence(aioclient_mock, states: list[str]):
 
 
 async def test_unlock_polls_until_state_confirmed(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     lock_id = er.async_get(hass).async_get_entity_id(
@@ -414,7 +336,6 @@ async def test_unlock_polls_until_state_confirmed(hass: HomeAssistant, aioclient
 
 
 async def test_poll_gives_up_after_timeout(hass: HomeAssistant, aioclient_mock, caplog) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     lock_id = er.async_get(hass).async_get_entity_id(
@@ -436,7 +357,6 @@ async def test_poll_interval_and_timeout_defaults(hass: HomeAssistant, aioclient
 
     monkeypatch.setattr(const, "LOCK_CONFIRM_INTERVAL", 1.0)
     monkeypatch.setattr(const, "LOCK_CONFIRM_TIMEOUT", 10.0)
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     aioclient_mock.patch(f"{API_BASE_URL}/sites/s1/locks/l1/locking", json={})
@@ -475,7 +395,6 @@ EOM_LOCKS = [
 
 
 async def _setup_eom(hass, aioclient_mock):
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=EOM_LOCKS)
     entry = await _setup(hass)
     for lock in EOM_LOCKS:
@@ -642,7 +561,6 @@ async def test_superseded_eom_sensors_removed(hass: HomeAssistant, aioclient_moc
     ]
     keep = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_lock_s1_l1__battery_level",
                                       config_entry=entry)
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=EOM_LOCKS)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -690,7 +608,6 @@ async def test_eom_remove_service_multiple_locks(hass: HomeAssistant, aioclient_
 async def test_eom_indefinite_schedule(hass: HomeAssistant, aioclient_mock, returned) -> None:
     """A schedule without end date (returned as null or empty) is shown and kept as indefinite."""
     locks = [{**EOM_LOCKS[0], "easy_office_mode_schedule": {**EOM, "end_date": returned}}, EOM_LOCKS[1]]
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=locks)
     entry = await _setup(hass)
     aioclient_mock.put(f"{API_BASE_URL}/sites/s1/locks/l1/easy_office_mode_schedule", json={})
@@ -723,7 +640,6 @@ def _entry(entry_id, when, lock="l1", category="Opening", **extra):
 
 async def _poll(hass, aioclient_mock, entries, locks=None, incidents=None):
     aioclient_mock.clear_requests()
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=locks, entries=entries, incidents=incidents)
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=11))
     await hass.async_block_till_done(wait_background_tasks=True)
@@ -738,7 +654,6 @@ async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) ->
     from homeassistant.core import callback
 
     old = _entry("e1", "2026-11-11T08:00:00.000")
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=EOM_LOCKS, entries=[old])
     entry = await _setup(hass)
 
@@ -797,7 +712,6 @@ async def test_last_entry_event(hass: HomeAssistant, aioclient_mock, freezer) ->
 
 
 async def test_entries_with_user_details(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock, entries=[_entry("e1", "2026-11-11T08:00:00.000")])
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
                             options={"include_user_details": True})
@@ -810,7 +724,6 @@ async def test_entries_with_user_details(hass: HomeAssistant, aioclient_mock) ->
 
 
 async def test_entries_failure_does_not_fail_update(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     aioclient_mock.get(f"{API_BASE_URL}/me", json=ME)
     aioclient_mock.get(f"{API_BASE_URL}/sites", json=SITES)
     aioclient_mock.get(f"{API_BASE_URL}/sites/s1/locks", json=LOCKS)
@@ -824,7 +737,6 @@ async def test_entries_failure_does_not_fail_update(hass: HomeAssistant, aioclie
 async def test_diagnostics_redacts_entries(hass: HomeAssistant, aioclient_mock) -> None:
     from custom_components.saltoks.diagnostics import async_get_config_entry_diagnostics
 
-    _token(aioclient_mock)
     _api(aioclient_mock, entries=[_entry("e1", "2026-11-11T08:00:00.000")])
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
                             options={"include_user_details": True})
@@ -839,7 +751,6 @@ async def test_diagnostics_redacts_entries(hass: HomeAssistant, aioclient_mock) 
 
 
 async def test_options_include_user_details(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
@@ -882,7 +793,6 @@ def _incident(incident_id, when, lock="l1", category="Battery", detail="Low", **
 async def test_last_incident_event(hass: HomeAssistant, aioclient_mock, freezer) -> None:
     from homeassistant.core import callback
 
-    _token(aioclient_mock)
     _api(aioclient_mock, locks=EOM_LOCKS,
          incidents=[_incident("i1", "2026-11-11T07:00:00.000")])
     entry = await _setup(hass)
@@ -921,7 +831,6 @@ async def test_last_incident_event(hass: HomeAssistant, aioclient_mock, freezer)
 async def test_event_types_are_bounded(hass: HomeAssistant, aioclient_mock, freezer) -> None:
     from custom_components.saltoks.event import MAX_EVENT_TYPES
 
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     many = [_entry(f"x{i}", f"2026-11-11T10:{i // 60:02d}:{i % 60:02d}.000", category=f"Cat {i}")
@@ -933,50 +842,16 @@ async def test_event_types_are_bounded(hass: HomeAssistant, aioclient_mock, free
     assert f"Cat {MAX_EVENT_TYPES + 19} - Key" in types
 
 
-@pytest.mark.parametrize("prefix", ["", "Basic "])
-async def test_migration_splits_basic_value(hass: HomeAssistant, aioclient_mock, prefix) -> None:
-    """Entries that stored base64("id:secret") in the client ID field are split."""
-    import base64
-
-    basic = base64.b64encode(b"my-client:my-secret").decode()
-    entry = MockConfigEntry(domain=DOMAIN, unique_id="u1", version=1, minor_version=3,
-                            data={"username": "user@example.com", "password": "pw",
-                                  "client_id": prefix + basic})
-    entry.add_to_hass(hass)
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    assert entry.minor_version == 4
-    assert entry.data["client_id"] == "my-client"
-    assert entry.data["client_secret"] == "my-secret"
-    token_call = next(c for c in aioclient_mock.mock_calls if "connect/token" in str(c[1]))
-    assert token_call[3]["Authorization"] == f"Basic {basic}"
-
-
-async def test_migration_keeps_unrecognised_client_id(hass: HomeAssistant, aioclient_mock) -> None:
-    entry = MockConfigEntry(domain=DOMAIN, unique_id="u1", version=1, minor_version=3,
-                            data={"username": "user@example.com", "password": "pw",
-                                  "client_id": "plain-client-id"})
-    entry.add_to_hass(hass)
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    assert entry.minor_version == 4
-    assert entry.data["client_id"] == "plain-client-id"
-    assert "client_secret" not in entry.data
-
-
-
 # ------------------------------------------------------- browser sign-in (PKCE)
 
 def _token_calls(aioclient_mock):
     return [c for c in aioclient_mock.mock_calls if str(c[1]) == TOKEN_URL]
 
 
-async def _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result, me=None):
-    """Complete the external sign-in step of a flow that shows the login page."""
+async def _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result, me=None,
+                           api=None):
+    """Complete the external sign-in step of a flow that shows the login page.
+    ``api`` registers the API responses for the signed-in account."""
     from yarl import URL
 
     assert result["type"] == "external"
@@ -989,7 +864,10 @@ async def _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result, me
         "token_type": "Bearer", "id_token": "header.payload.signature",
         "scope": "openid profile user_api.full_access offline_access",
     })
-    _api(aioclient_mock, me=me)
+    if api:
+        api()
+    else:
+        _api(aioclient_mock, me=me)
     return await hass.config_entries.flow.async_configure(result["flow_id"])
 
 
@@ -1065,55 +943,9 @@ async def test_browser_sign_in_same_account_aborts(
     assert result["reason"] == "already_configured"
 
 
-async def test_legacy_entry_switches_to_browser_sign_in(
-    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
-) -> None:
-    from homeassistant.helpers import issue_registry as ir
-    from custom_components.saltoks import repairs
-
-    # Older entry: works with the stored password and shows a repair issue.
-    _token(aioclient_mock)
-    _api(aioclient_mock)
-    entry = MockConfigEntry(domain=DOMAIN, data=LEGACY_DATA, unique_id="u1",
-                            version=1, minor_version=4)
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    assert entry.state is ConfigEntryState.LOADED
-    issue_id = f"switch_to_browser_sign_in_{entry.entry_id}"
-    issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
-    assert issue is not None and issue.is_fixable
-
-    # The repair starts the browser sign-in (re-authentication).
-    flow = await repairs.async_create_fix_flow(hass, issue_id, issue.data)
-    # Set by the repairs flow manager in Home Assistant.
-    flow.hass, flow.handler, flow.issue_id = hass, DOMAIN, issue_id
-    form = await flow.async_step_init()
-    assert form["description_placeholders"] == {"title": entry.title}
-    assert form["step_id"] == "confirm"
-    await flow.async_step_confirm({})
-    await hass.async_block_till_done()
-    reauth = [f for f in hass.config_entries.flow.async_progress()
-              if f["context"]["source"] == "reauth"]
-    assert len(reauth) == 1
-
-    result = await hass.config_entries.flow.async_configure(reauth[0]["flow_id"], {})
-    aioclient_mock.clear_requests()
-    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
-    assert result["type"] == "abort"
-    assert result["reason"] == "reauth_successful"
-    await hass.async_block_till_done()
-
-    # Password and client credentials are gone; only tokens remain.
-    assert set(entry.data) == {"auth_implementation", "token"}
-    assert entry.state is ConfigEntryState.LOADED
-    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
-
-
 async def test_reauth_with_other_account_aborts(
     hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
 ) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     result = await entry.start_reauth_flow(hass)
@@ -1200,7 +1032,6 @@ async def test_api_401_refreshes_token_and_retries(hass: HomeAssistant, aioclien
 
 
 async def test_options_change_reloads(hass: HomeAssistant, aioclient_mock) -> None:
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     coordinator = entry.runtime_data
@@ -1212,9 +1043,153 @@ async def test_options_change_reloads(hass: HomeAssistant, aioclient_mock) -> No
 async def test_diagnostics_redacts_tokens(hass: HomeAssistant, aioclient_mock) -> None:
     from custom_components.saltoks.diagnostics import async_get_config_entry_diagnostics
 
-    _token(aioclient_mock)
     _api(aioclient_mock)
     entry = await _setup(hass)
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["entry"]["token"] == "**REDACTED**"
     assert "tok1" not in json.dumps(diag)
+
+
+
+# ---------------------------------------------------------- switching account
+
+def _api_account(aioclient_mock, me, sites):
+    """Responses for an account: ``sites`` maps a site id to its lock ids."""
+    aioclient_mock.get(f"{API_BASE_URL}/me", json=me)
+    aioclient_mock.get(f"{API_BASE_URL}/sites", json={"items": [
+        {"id": sid, "customer_reference": f"Site {sid}"} for sid in sites]})
+    for sid, lock_ids in sites.items():
+        aioclient_mock.get(f"{API_BASE_URL}/sites/{sid}/locks", json=[
+            {"id": lid, "customer_reference": f"Lock {lid}", "locked_state": "locked"}
+            for lid in lock_ids])
+        for feed in ("entries", "incidents"):
+            aioclient_mock.get(f"https://connect.saltoks.com/v1.1/sites/{sid}/{feed}",
+                               json={"items": []})
+
+
+ME_U2 = {"id": "U2", "first_name": "Other", "last_name": "Person", "email": "o@example.com",
+         "language": "nl"}
+
+
+async def test_reconfigure_switches_account(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    devreg, entreg = dr.async_get(hass), er.async_get(hass)
+    # Account u1 sees sites s1 (lock l1) and s3 (lock l9).
+    _api_account(aioclient_mock, ME, {"s1": ["l1"], "s3": ["l9"]})
+    entry = await _setup(hass)
+
+    def eid(platform, uid):
+        return entreg.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{uid}")
+
+    old_language = eid("sensor", "account_u1__language")
+    assert hass.states.get(old_language).state == "en"
+
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["step_id"] == "reconfigure"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    from yarl import URL
+    query = URL(result["url"]).query
+    assert query["prompt"] == "login"
+    assert "login_hint" not in query  # another account may be chosen
+
+    # Account U2 sees s1 (lock l1, shared) and s2 (lock l3, new); not s3.
+    aioclient_mock.clear_requests()
+    result = await _browser_sign_in(
+        hass, hass_client_no_auth, aioclient_mock, result,
+        api=lambda: _api_account(aioclient_mock, ME_U2, {"s1": ["l1"], "s2": ["l3"]}))
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.unique_id == "u2"
+    assert entry.title == "Salto KS (o@example.com)"
+    assert entry.data["token"]["access_token"] == "new-access"
+
+    # New account device and entities; the old ones are unavailable.
+    new_account = devreg.async_get_device(identifiers={(DOMAIN, "account_u2")})
+    old_account = devreg.async_get_device(identifiers={(DOMAIN, "account_u1")})
+    assert new_account.name == "Other Person"
+    assert old_account is not None
+    assert hass.states.get(eid("sensor", "account_u2__language")).state == "nl"
+    assert hass.states.get(old_language).state == "unavailable"
+
+    # Shared site and lock keep working; s3 is unavailable; s2 and l3 are new.
+    assert hass.states.get(eid("lock", "lock_s1_l1")).state == "locked"
+    assert hass.states.get(eid("lock", "lock_s3_l9")).state == "unavailable"
+    assert hass.states.get(eid("lock", "lock_s2_l3")).state == "locked"
+    s1 = devreg.async_get_device(identifiers={(DOMAIN, "site_s1")})
+    s2 = devreg.async_get_device(identifiers={(DOMAIN, "site_s2")})
+    assert s1.via_device_id == new_account.id
+    assert s2.via_device_id == new_account.id
+    l3 = devreg.async_get_device(identifiers={(DOMAIN, "lock_s2_l3")})
+    assert l3.via_device_id == s2.id
+
+    # The old account device and the inaccessible site can be removed; the
+    # current account device and accessible sites cannot.
+    from custom_components.saltoks import async_remove_config_entry_device
+    s3 = devreg.async_get_device(identifiers={(DOMAIN, "site_s3")})
+    assert await async_remove_config_entry_device(hass, entry, old_account)
+    assert await async_remove_config_entry_device(hass, entry, s3)
+    assert not await async_remove_config_entry_device(hass, entry, new_account)
+    assert not await async_remove_config_entry_device(hass, entry, s1)
+
+
+async def test_reconfigure_to_account_of_other_entry_aborts(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u2").add_to_hass(hass)
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    aioclient_mock.clear_requests()
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result, me=ME_U2)
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
+    assert entry.unique_id == "u1"
+    assert entry.data["token"]["access_token"] == "tok1"
+
+
+async def test_reconfigure_same_account(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    _api(aioclient_mock)
+    entry = await _setup(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    aioclient_mock.clear_requests()
+    result = await _browser_sign_in(hass, hass_client_no_auth, aioclient_mock, result)
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    assert entry.unique_id == "u1"
+    assert entry.data["token"]["access_token"] == "new-access"
+    assert len(dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)) == 3
+
+
+async def test_migration_moves_account_device_to_account(hass: HomeAssistant, aioclient_mock) -> None:
+    """Existing account device and entities keep their device, entity IDs and history."""
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            version=1, minor_version=4)
+    entry.add_to_hass(hass)
+    devreg, entreg = dr.async_get(hass), er.async_get(hass)
+    device = devreg.async_get_or_create(config_entry_id=entry.entry_id,
+                                        identifiers={(DOMAIN, entry.entry_id)}, name="Test User")
+    language = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_me__language",
+                                          config_entry=entry, device_id=device.id)
+    image = entreg.async_get_or_create("image", DOMAIN, f"{entry.entry_id}_profile_image",
+                                       config_entry=entry, device_id=device.id)
+    site_id = entreg.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_site_s1__timezone",
+                                         config_entry=entry)
+    _api(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.minor_version == 5
+    moved = devreg.async_get_device(identifiers={(DOMAIN, "account_u1")})
+    assert moved.id == device.id
+    assert entreg.async_get(language.entity_id).unique_id == f"{entry.entry_id}_account_u1__language"
+    assert entreg.async_get(image.entity_id).unique_id == f"{entry.entry_id}_account_u1_profile_image"
+    assert entreg.async_get(site_id.entity_id).unique_id == f"{entry.entry_id}_site_s1__timezone"
+    assert hass.states.get(language.entity_id).state == "en"
