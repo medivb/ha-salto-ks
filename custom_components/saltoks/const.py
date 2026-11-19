@@ -9,8 +9,6 @@ DOMAIN: Final = "saltoks"
 TOKEN_URL: Final = "https://identity.eu.my-clay.com/connect/token"
 API_BASE_URL: Final = "https://connect.saltoks.com/v1.2"
 
-CONF_CLIENT_ID: Final = "client_id"
-CONF_CLIENT_SECRET: Final = "client_secret"
 CONF_SCAN_INTERVAL: Final = "scan_interval"
 CONF_INCLUDE_USER_DETAILS: Final = "include_user_details"
 
@@ -41,9 +39,6 @@ STATE_OFFICE_MODE: Final = "office_mode"
 # the requested state, for at most LOCK_CONFIRM_TIMEOUT seconds.
 LOCK_CONFIRM_INTERVAL: Final = 1.0
 LOCK_CONFIRM_TIMEOUT: Final = 10.0
-
-# Refresh the access token this many seconds before it expires.
-TOKEN_EXPIRY_MARGIN: Final = 60
 
 # Maximum number of concurrent lock-list requests per update cycle.
 MAX_CONCURRENT_REQUESTS: Final = 5

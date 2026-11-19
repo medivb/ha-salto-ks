@@ -24,6 +24,7 @@ from .entity import (
     MetadataKey,
     SaltoKSEntity,
     SaltoKSMetadataEntity,
+    account_id,
     humanize,
     setup_metadata_platform,
 )
@@ -32,8 +33,6 @@ _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 
-# Handled by SaltoKSProfileImage (kept for a stable entity ID).
-PROFILE_IMAGE_KEY = MetadataKey(SCOPE_ME, ("image_url",))
 
 
 async def async_setup_entry(
@@ -42,7 +41,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    coordinator.claimed_metadata.add(PROFILE_IMAGE_KEY.uid)
+    # The profile picture is handled by SaltoKSProfileImage (stable entity ID).
+    coordinator.claimed_metadata.add(
+        MetadataKey(SCOPE_ME, ("image_url",), account=account_id(coordinator)).uid
+    )
     async_add_entities([SaltoKSProfileImage(hass, coordinator)])
     entry.async_on_unload(
         setup_metadata_platform(
@@ -133,7 +135,9 @@ class SaltoKSProfileImage(_UrlImageMixin, SaltoKSEntity, ImageEntity):
     def __init__(self, hass: HomeAssistant, coordinator: SaltoKSCoordinator) -> None:
         SaltoKSEntity.__init__(self, coordinator)
         ImageEntity.__init__(self, hass)
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_profile_image"
+        self._attr_unique_id = (
+            f"{coordinator.config_entry.entry_id}_account_{account_id(coordinator)}_profile_image"
+        )
         self._sync_url()
 
     def _source_url(self) -> str | None:

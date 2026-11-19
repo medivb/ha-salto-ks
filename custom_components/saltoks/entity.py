@@ -84,10 +84,21 @@ def humanize(path: tuple[str, ...]) -> str:
 # ---------------------------------------------------------------- devices
 
 
+def account_id(coordinator: SaltoKSCoordinator) -> str:
+    """ID of the signed-in account (lowercase), as also used for the entry."""
+    me = coordinator.data.me if coordinator.data else {}
+    entry = coordinator.config_entry
+    return str(me.get("id") or entry.unique_id or entry.entry_id).lower()
+
+
+def account_device_identifier(coordinator: SaltoKSCoordinator) -> tuple[str, str]:
+    return (DOMAIN, f"account_{account_id(coordinator)}")
+
+
 def account_device_info(coordinator: SaltoKSCoordinator) -> DeviceInfo:
     me = coordinator.data.me if coordinator.data else {}
     return DeviceInfo(
-        identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
+        identifiers={account_device_identifier(coordinator)},
         name=account_name(me),
         manufacturer=MANUFACTURER,
         model="Salto KS account",
@@ -101,7 +112,7 @@ def site_device_info(coordinator: SaltoKSCoordinator, site_id: str) -> DeviceInf
         name=site_name(site, site_id),
         manufacturer=MANUFACTURER,
         model="Salto KS site",
-        via_device=(DOMAIN, coordinator.config_entry.entry_id),
+        via_device=account_device_identifier(coordinator),
     )
 
 
@@ -174,11 +185,13 @@ class MetadataKey:
     path: tuple[str, ...]
     site_id: str | None = None
     lock_id: str | None = None
+    # Account fields belong to the account, so another account gets its own.
+    account: str | None = None
 
     @property
     def uid(self) -> str:
         if self.scope == SCOPE_ME:
-            owner = "me"
+            owner = f"account_{self.account}"
         elif self.scope == SCOPE_SITE:
             owner = f"site_{self.site_id}"
         else:
@@ -216,7 +229,7 @@ def source_object(data: SaltoKSData, key: MetadataKey) -> dict[str, Any] | None:
     return data.locks.get(key.site_id or "", {}).get(key.lock_id or "")
 
 
-def iter_metadata(data: SaltoKSData) -> Iterator[tuple[MetadataKey, str]]:
+def iter_metadata(data: SaltoKSData, account: str) -> Iterator[tuple[MetadataKey, str]]:
     """Yield every metadata field currently present with the platform kind."""
 
     def _kind(path: tuple[str, ...], value: Any) -> str:
@@ -225,7 +238,7 @@ def iter_metadata(data: SaltoKSData) -> Iterator[tuple[MetadataKey, str]]:
         return KIND_BINARY if isinstance(value, bool) else KIND_SENSOR
 
     for path, value in flatten(data.me):
-        yield MetadataKey(SCOPE_ME, path), _kind(path, value)
+        yield MetadataKey(SCOPE_ME, path, account=account), _kind(path, value)
     for site_id, site in data.sites.items():
         for path, value in flatten(site):
             yield MetadataKey(SCOPE_SITE, path, site_id), _kind(path, value)
@@ -277,7 +290,7 @@ def setup_metadata_platform(
         if not coordinator.data:
             return
         new = []
-        for key, value_kind in iter_metadata(coordinator.data):
+        for key, value_kind in iter_metadata(coordinator.data, account_id(coordinator)):
             if value_kind != kind or key.uid in coordinator.claimed_metadata:
                 continue
             coordinator.claimed_metadata.add(key.uid)

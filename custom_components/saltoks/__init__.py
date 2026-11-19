@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import base64
-
-from homeassistant.const import CONF_PASSWORD, CONF_TOKEN, CONF_USERNAME, Platform
+from homeassistant.const import CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import (
     config_entry_oauth2_flow,
     device_registry as dr,
     entity_registry as er,
-    issue_registry as ir,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import SaltoKSClient, SaltoKSTokenClient
-from .const import CONF_CLIENT_ID, CONF_CLIENT_SECRET, DOMAIN
-from .oauth import async_register_oauth
+from .api import SaltoKSTokenClient
+from .const import DOMAIN, MANUFACTURER
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
+from .oauth import async_register_oauth
 from .entity import (
+    account_device_identifier,
     account_name,
     is_id_field,
     is_image_field,
@@ -42,50 +41,30 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> bool:
     """Set up Salto KS from a config entry."""
-    session = async_get_clientsession(hass)
-    client: SaltoKSClient
-    if CONF_TOKEN in entry.data:
-        # Browser sign-in: only tokens are stored.
-        async_register_oauth(hass)
-        implementation = (
-            await config_entry_oauth2_flow.async_get_config_entry_implementation(hass, entry)
-        )
-        client = SaltoKSTokenClient(
-            session, config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation)
-        )
-        ir.async_delete_issue(hass, DOMAIN, _legacy_issue_id(entry))
-    else:
-        # Entry from an earlier version: username, password and client
-        # credentials. Keeps working; a repair suggests the browser sign-in.
-        client = SaltoKSClient(
-            session,
-            entry.data[CONF_USERNAME],
-            entry.data[CONF_PASSWORD],
-            entry.data[CONF_CLIENT_ID],
-            entry.data.get(CONF_CLIENT_SECRET, ""),
-        )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            _legacy_issue_id(entry),
-            is_fixable=True,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="switch_to_browser_sign_in",
-            translation_placeholders={"title": entry.title},
-            data={"entry_id": entry.entry_id},
-        )
+    if CONF_TOKEN not in entry.data:
+        # No sign-in token stored: sign in again in the browser.
+        raise ConfigEntryAuthFailed("Sign in to Salto KS in the browser")
+    async_register_oauth(hass)
+    implementation = await config_entry_oauth2_flow.async_get_config_entry_implementation(
+        hass, entry
+    )
+    client = SaltoKSTokenClient(
+        async_get_clientsession(hass),
+        config_entry_oauth2_flow.OAuth2Session(hass, entry, implementation),
+    )
     coordinator = SaltoKSCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
 
-    # Create the account device first so site devices can reference it.
+    # Create the account device first so site devices can reference it. The
+    # device belongs to the signed-in account: after switching to another
+    # account, a new device is created and the old one becomes unavailable.
     dev_reg = dr.async_get(hass)
     dev_reg.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={(DOMAIN, entry.entry_id)},
+        identifiers={account_device_identifier(coordinator)},
         name=account_name(coordinator.data.me),
-        manufacturer="SALTO Systems",
+        manufacturer=MANUFACTURER,
         model="Salto KS account",
     )
 
@@ -94,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
         """Keep device names aligned with customer_reference / profile changes."""
         if not coordinator.data:
             return
-        wanted = {entry.entry_id: account_name(coordinator.data.me)}
+        wanted = {account_device_identifier(coordinator)[1]: account_name(coordinator.data.me)}
         for site_id, site in coordinator.data.sites.items():
             wanted[f"site_{site_id}"] = site_name(site, site_id)
             for lock_id, lock in coordinator.data.locks.get(site_id, {}).items():
@@ -144,21 +123,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) ->
     """Migrate older config entries."""
     if entry.version > 1:
         return False
-    if entry.minor_version < 4:
-        # 1.4: the client ID field used to hold the ready-made Basic value,
-        # base64("client_id:client_secret"). Split it into both fields.
-        if not entry.data.get(CONF_CLIENT_SECRET):
-            split = split_basic_value(entry.data.get(CONF_CLIENT_ID, ""))
-            if split:
-                client_id, client_secret = split
-                hass.config_entries.async_update_entry(
-                    entry,
-                    data={
-                        **entry.data,
-                        CONF_CLIENT_ID: client_id,
-                        CONF_CLIENT_SECRET: client_secret,
-                    },
-                )
     if entry.minor_version < 3:
         # 1.3: identifier entities are disabled instead of hidden. Applied once,
         # so a later choice by the user to enable one is respected.
@@ -177,33 +141,35 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) ->
             if changes:
                 ent_reg.async_update_entity(reg_entry.entity_id, **changes)
         hass.config_entries.async_update_entry(entry, minor_version=3)
-    if entry.minor_version < 4:
-        hass.config_entries.async_update_entry(entry, minor_version=4)
+    if entry.minor_version < 5:
+        # 1.5: the account device and the account entities belong to the
+        # account instead of the entry, so switching accounts creates a new
+        # device. Existing ones keep their device, entity IDs and history.
+        if entry.unique_id:
+            _migrate_account_identifiers(hass, entry, entry.unique_id.lower())
+        hass.config_entries.async_update_entry(entry, minor_version=5)
     return True
 
 
-def split_basic_value(value: str) -> tuple[str, str] | None:
-    """Return (client_id, client_secret) when value is base64("id:secret")."""
-    value = value.strip()
-    if value.lower().startswith("basic "):
-        value = value[6:].strip()
-    try:
-        decoded = base64.b64decode(value, validate=True).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return None
-    client_id, sep, client_secret = decoded.partition(":")
-    if not sep or not client_id or not decoded.isprintable():
-        return None
-    return client_id, client_secret
-
-
-def _legacy_issue_id(entry: SaltoKSConfigEntry) -> str:
-    return f"switch_to_browser_sign_in_{entry.entry_id}"
-
-
-async def async_remove_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
-    """Remove the repair issue of an entry that is deleted."""
-    ir.async_delete_issue(hass, DOMAIN, _legacy_issue_id(entry))
+def _migrate_account_identifiers(
+    hass: HomeAssistant, entry: SaltoKSConfigEntry, account: str
+) -> None:
+    dev_reg = dr.async_get(hass)
+    if device := dev_reg.async_get_device(identifiers={(DOMAIN, entry.entry_id)}):
+        dev_reg.async_update_device(
+            device.id, new_identifiers={(DOMAIN, f"account_{account}")}
+        )
+    ent_reg = er.async_get(hass)
+    old_prefix = f"{entry.entry_id}_me__"
+    for reg_entry in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
+        new_unique_id = None
+        if reg_entry.unique_id.startswith(old_prefix):
+            field = reg_entry.unique_id.removeprefix(old_prefix)
+            new_unique_id = f"{entry.entry_id}_account_{account}__{field}"
+        elif reg_entry.unique_id == f"{entry.entry_id}_profile_image":
+            new_unique_id = f"{entry.entry_id}_account_{account}_profile_image"
+        if new_unique_id:
+            ent_reg.async_update_entity(reg_entry.entity_id, new_unique_id=new_unique_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> bool:
@@ -214,12 +180,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> 
 async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: SaltoKSConfigEntry, device: dr.DeviceEntry
 ) -> bool:
-    """Allow removing site and lock devices that are no longer returned by the API."""
-    data = entry.runtime_data.data
+    """Allow removing devices that are no longer returned by the API: sites,
+    locks, and the account device of a previously used account."""
+    coordinator = entry.runtime_data
+    data = coordinator.data
+    current_account = account_device_identifier(coordinator)[1]
     for domain, ident in device.identifiers:
         if domain != DOMAIN:
             continue
-        if ident == entry.entry_id:
+        if ident == current_account:
             return False
         if ident.startswith("site_") and ident.removeprefix("site_") in data.sites:
             return False

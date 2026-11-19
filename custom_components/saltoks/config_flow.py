@@ -8,8 +8,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlow
-from homeassistant.const import CONF_USERNAME
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -31,14 +35,14 @@ _LOGGER = logging.getLogger(__name__)
 class SaltoKSConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Sign in on the Salto KS login page; only tokens are stored.
 
-    Re-authentication uses the same browser sign-in. For entries created
-    with username, password and client credentials (earlier versions), it
-    replaces those stored credentials with tokens.
+    - Re-authentication must use the same account as before.
+    - Reconfigure (switch account) may use another account: the entry then
+      follows that account, with a new account device.
     """
 
     DOMAIN = DOMAIN
     VERSION = 1
-    MINOR_VERSION = 4
+    MINOR_VERSION = 5
 
     _login_hint: str | None = None
 
@@ -59,7 +63,7 @@ class SaltoKSConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, doma
         entry = self._get_reauth_entry()
         coordinator = getattr(entry, "runtime_data", None)
         me = coordinator.data.me if coordinator and coordinator.data else {}
-        self._login_hint = str(me.get("email") or entry_data.get(CONF_USERNAME) or "") or None
+        self._login_hint = str(me.get("email") or "") or None
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -67,6 +71,17 @@ class SaltoKSConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, doma
     ) -> ConfigFlowResult:
         if user_input is None:
             return self.async_show_form(step_id="reauth_confirm")
+        return await self.async_step_user()
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Switch account: explain the consequences, then sign in."""
+        if user_input is None:
+            return self.async_show_form(
+                step_id="reconfigure",
+                description_placeholders={"title": self._get_reconfigure_entry().title},
+            )
         return await self.async_step_user()
 
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
@@ -82,20 +97,32 @@ class SaltoKSConfigFlow(config_entry_oauth2_flow.AbstractOAuth2FlowHandler, doma
         if not me.get("id"):
             return self.async_abort(reason="cannot_connect")
 
-        # Same unique ID as entries created with a password, so re-authentication
-        # can switch those over without creating a new entry.
-        await self.async_set_unique_id(str(me["id"]).lower())
+        account = str(me["id"]).lower()
+        title = f"Salto KS ({me.get('email') or me.get('username') or 'account'})"
+
         if self.source == SOURCE_REAUTH:
             entry = self._get_reauth_entry()
-            if entry.unique_id != self.unique_id:
+            if entry.unique_id != account:
                 return self.async_abort(reason="wrong_account")
-            # Replaces all stored data: any username, password and client
-            # credentials from earlier versions are removed.
             return self.async_update_reload_and_abort(entry, data=data)
 
+        if self.source == SOURCE_RECONFIGURE:
+            entry = self._get_reconfigure_entry()
+            if any(
+                other.unique_id == account and other.entry_id != entry.entry_id
+                for other in self._async_current_entries(include_ignore=False)
+            ):
+                return self.async_abort(reason="already_configured")
+            # The entry follows the new account. After the reload, sites and
+            # locks the account cannot access become unavailable and new ones
+            # are added; the previous account device becomes unavailable.
+            return self.async_update_reload_and_abort(
+                entry, unique_id=account, title=title, data=data
+            )
+
+        await self.async_set_unique_id(account)
         self._abort_if_unique_id_configured()
-        title = str(me.get("email") or me.get("username") or "account")
-        return self.async_create_entry(title=f"Salto KS ({title})", data=data)
+        return self.async_create_entry(title=title, data=data)
 
     @staticmethod
     @callback
