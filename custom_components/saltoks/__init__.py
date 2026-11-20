@@ -21,7 +21,6 @@ from .entity import (
     account_name,
     is_id_field,
     is_image_field,
-    is_superseded_field,
     lock_name,
     site_name,
 )
@@ -101,12 +100,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> b
 
 
 def _remove_superseded_entities(hass: HomeAssistant, entry: SaltoKSConfigEntry) -> None:
-    """Remove metadata entities created by earlier versions for fields that
-    are now exposed differently: picture URLs (now image entities) and the
-    Easy Office Mode schedule (now controls on the lock device)."""
+    """Remove metadata entities created by earlier versions for details that
+    are now exposed differently: picture URLs (now image entities) and all
+    lock details (now attributes of the lock entity)."""
     ent_reg = er.async_get(hass)
     for reg_entry in er.async_entries_for_config_entry(ent_reg, entry.entry_id):
-        if reg_entry.domain not in (Platform.SENSOR, Platform.BINARY_SENSOR):
+        if reg_entry.domain not in (Platform.SENSOR, Platform.BINARY_SENSOR, Platform.IMAGE):
             continue
         if "__" not in reg_entry.unique_id:
             continue
@@ -114,7 +113,7 @@ def _remove_superseded_entities(hass: HomeAssistant, entry: SaltoKSConfigEntry) 
         path = tuple(field.split("."))
         superseded = (
             reg_entry.domain == Platform.SENSOR and is_image_field(path)
-        ) or ("_lock_" in owner and is_superseded_field(path))
+        ) or owner.startswith(f"{entry.entry_id}_lock_")
         if superseded:
             ent_reg.async_remove(reg_entry.entity_id)
 
