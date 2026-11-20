@@ -1232,19 +1232,64 @@ async def test_lock_entity_ids_start_with_site_name(hass: HomeAssistant, aioclie
         "friendly_name"] == "Front door Last entry"
 
 
-async def test_existing_entity_ids_are_kept(hass: HomeAssistant, aioclient_mock) -> None:
+async def test_ids_without_site_are_renamed_custom_ids_kept(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            version=1, minor_version=5)
+    entry.add_to_hass(hass)
+    entreg = er.async_get(hass)
+
+    def register(platform, uid, object_id):
+        return entreg.async_get_or_create(platform, DOMAIN, f"{entry.entry_id}_{uid}",
+                                          config_entry=entry, suggested_object_id=object_id)
+
+    # Generated without the site name (by an earlier version).
+    last_entry = register("event", "lock_s1_l1_last_entry", "front_door_last_entry")
+    lock = register("lock", "lock_s1_l1", "front_door")
+    # Generated without the site name, with a numeric suffix.
+    incident = register("event", "lock_s1_l1_last_incident", "front_door_last_incident_2")
+    # Chosen by the user: kept.
+    custom = register("sensor", "lock_s1_l1__battery_level", "my_front_door_battery")
+    # Already site-based: kept.
+    online = register("binary_sensor", "lock_s1_l1__online", "hq_amsterdam_front_door_online")
+
+    _api(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    def current(reg):
+        return entreg.async_get_entity_id(reg.domain, DOMAIN, reg.unique_id)
+
+    assert current(last_entry) == "event.hq_amsterdam_front_door_last_entry"
+    assert current(lock) == "lock.hq_amsterdam_front_door"
+    assert current(incident) == "event.hq_amsterdam_front_door_last_incident"
+    assert current(custom) == "sensor.my_front_door_battery"
+    assert current(online) == "binary_sensor.hq_amsterdam_front_door_online"
+    assert hass.states.get("lock.hq_amsterdam_front_door").state == "locked"
+    assert hass.states.get("lock.front_door") is None
+    # Settings stay with the renamed entity (same registry entry).
+    assert entreg.async_get("lock.hq_amsterdam_front_door").id == lock.id
+
+
+async def test_restored_deleted_entity_gets_site_entity_id(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    """A deleted entity that comes back gets its old ID restored by Home
+    Assistant; an old ID without the site name is then renamed."""
     entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
                             version=1, minor_version=5)
     entry.add_to_hass(hass)
     entreg = er.async_get(hass)
     old = entreg.async_get_or_create("event", DOMAIN, f"{entry.entry_id}_lock_s1_l1_last_entry",
                                      config_entry=entry, suggested_object_id="front_door_last_entry")
+    entreg.async_remove(old.entity_id)  # kept as a deleted entity by Home Assistant
     _api(aioclient_mock)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert old.entity_id == "event.front_door_last_entry"
-    assert entreg.async_get(old.entity_id) is not None
-    assert hass.states.get("event.hq_amsterdam_front_door_last_entry") is None
+    assert entreg.async_get_entity_id(
+        "event", DOMAIN, old.unique_id) == "event.hq_amsterdam_front_door_last_entry"
+    assert entreg.async_get("event.hq_amsterdam_front_door_last_entry").id == old.id
 
 
 async def test_new_site_after_switch_gets_site_entity_ids(

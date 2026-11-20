@@ -55,7 +55,7 @@ The integration creates:
 
 Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and last incident, and the lock's details.
 
-The entity IDs of a lock's entities start with the site name and the lock name, for example `lock.house_of_broeks_voordeur` and `event.house_of_broeks_voordeur_last_entry`. This applies when an entity is created; entity IDs that already exist, or that you changed yourself, are kept.
+The entity IDs of a lock's entities start with the site name and the lock name, for example `lock.house_of_broeks_voordeur` and `event.house_of_broeks_voordeur_last_entry`. Entity IDs that were generated without the site name (by an earlier version, or restored by Home Assistant when a removed lock comes back) are renamed automatically when the integration starts. Entity IDs that you changed yourself are kept. After such a rename, update automations, scripts and dashboards that use the old entity ID.
 
 ## Locks
 
