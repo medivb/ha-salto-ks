@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import json
+from pathlib import Path
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -1193,3 +1194,82 @@ async def test_migration_moves_account_device_to_account(hass: HomeAssistant, ai
     assert entreg.async_get(image.entity_id).unique_id == f"{entry.entry_id}_account_u1_profile_image"
     assert entreg.async_get(site_id.entity_id).unique_id == f"{entry.entry_id}_site_s1__timezone"
     assert hass.states.get(language.entity_id).state == "en"
+
+
+# ------------------------------------------------------------------ entity IDs
+
+async def test_lock_entity_ids_start_with_site_name(hass: HomeAssistant, aioclient_mock) -> None:
+    _api(aioclient_mock, locks=EOM_LOCKS)
+    entry = await _setup(hass)
+    entreg = er.async_get(hass)
+
+    def eid(platform, uid):
+        return entreg.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{uid}")
+
+    expected = {
+        eid("lock", "lock_s1_l1"): "lock.hq_amsterdam_front_door",
+        eid("event", "lock_s1_l1_last_entry"): "event.hq_amsterdam_front_door_last_entry",
+        eid("event", "lock_s1_l1_last_incident"): "event.hq_amsterdam_front_door_last_incident",
+        eid("switch", "lock_s1_l1_eom_monday"): "switch.hq_amsterdam_front_door_easy_office_mode_monday",
+        eid("switch", "lock_s1_l1_eom_eom_auto_start"):
+            "switch.hq_amsterdam_front_door_easy_office_mode_auto_start",
+        eid("time", "lock_s1_l1_eom_start_time"):
+            "time.hq_amsterdam_front_door_easy_office_mode_start_time",
+        eid("date", "lock_s1_l1_eom_end_date"):
+            "date.hq_amsterdam_front_door_easy_office_mode_end_date",
+        eid("button", "lock_s1_l1_eom_remove"):
+            "button.hq_amsterdam_front_door_remove_easy_office_mode_schedule",
+        eid("sensor", "lock_s1_l1__battery_level"): "sensor.hq_amsterdam_front_door_battery_level",
+        eid("binary_sensor", "lock_s1_l1__online"): "binary_sensor.hq_amsterdam_front_door_online",
+        eid("lock", "lock_s1_l2"): "lock.hq_amsterdam_back_door",
+        # Site and account entities are not affected.
+        eid("sensor", "site_s1__timezone"): "sensor.hq_amsterdam_timezone",
+        eid("sensor", "account_u1__language"): "sensor.test_user_language",
+    }
+    assert expected == {v: v for v in expected.values()}
+    # Friendly names stay "<lock> <entity>".
+    assert hass.states.get("event.hq_amsterdam_front_door_last_entry").attributes[
+        "friendly_name"] == "Front door Last entry"
+
+
+async def test_existing_entity_ids_are_kept(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, data=ENTRY_DATA, unique_id="u1",
+                            version=1, minor_version=5)
+    entry.add_to_hass(hass)
+    entreg = er.async_get(hass)
+    old = entreg.async_get_or_create("event", DOMAIN, f"{entry.entry_id}_lock_s1_l1_last_entry",
+                                     config_entry=entry, suggested_object_id="front_door_last_entry")
+    _api(aioclient_mock)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert old.entity_id == "event.front_door_last_entry"
+    assert entreg.async_get(old.entity_id) is not None
+    assert hass.states.get("event.hq_amsterdam_front_door_last_entry") is None
+
+
+async def test_new_site_after_switch_gets_site_entity_ids(
+    hass: HomeAssistant, hass_client_no_auth, aioclient_mock, current_request_with_host
+) -> None:
+    _api_account(aioclient_mock, ME, {"s1": ["l1"]})
+    entry = await _setup(hass)
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    aioclient_mock.clear_requests()
+    await _browser_sign_in(
+        hass, hass_client_no_auth, aioclient_mock, result,
+        api=lambda: _api_account(aioclient_mock, ME_U2, {"s1": ["l1"], "s2": ["l3"]}))
+    await hass.async_block_till_done()
+    assert hass.states.get("lock.site_s2_lock_l3").state == "locked"
+    assert hass.states.get("event.site_s2_lock_l3_last_entry") is not None
+    assert hass.states.get("lock.site_s1_lock_l1").state == "locked"
+
+
+def test_entity_names_match_translations() -> None:
+    from custom_components.saltoks.entity import ENTITY_NAMES
+
+    strings = json.loads(
+        (Path(__file__).parent.parent / "custom_components/saltoks/strings.json").read_text())
+    translated = {key: value["name"] for platform in strings["entity"].values()
+                  for key, value in platform.items()}
+    for key, name in ENTITY_NAMES.items():
+        assert translated[key] == name

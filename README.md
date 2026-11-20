@@ -55,6 +55,8 @@ The integration creates:
 
 Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and last incident, and the lock's details.
 
+The entity IDs of a lock's entities start with the site name and the lock name, for example `lock.house_of_broeks_voordeur` and `event.house_of_broeks_voordeur_last_entry`. This applies when an entity is created; entity IDs that already exist, or that you changed yourself, are kept.
+
 ## Locks
 
 - Locking or unlocking a lock shows it as *locking* / *unlocking* until Salto KS confirms the new state, usually within a few seconds.
