@@ -9,8 +9,11 @@ from typing import Any
 from homeassistant.const import EntityCategory
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import callback
+from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
 from .const import DOMAIN, MANUFACTURER, MAX_FLATTEN_DEPTH
 from . import eom
@@ -285,6 +288,7 @@ def setup_metadata_platform(
     async_add_entities: Callable[[list[Entity]], None],
 ) -> Callable[[], None]:
     """Add metadata entities now and whenever new fields/objects appear."""
+    async_add_entities = _site_entity_adder(async_add_entities)
 
     def _discover() -> None:
         if not coordinator.data:
@@ -302,6 +306,65 @@ def setup_metadata_platform(
     return coordinator.async_add_listener(_discover)
 
 
+# --------------------------------------------------------------- entity IDs
+
+# English entity names, used for entity IDs (names shown in the interface
+# come from the translations; a test keeps both in sync).
+ENTITY_NAMES: dict[str, str] = {
+    "eom_auto_start": "Easy Office Mode auto start",
+    **{f"eom_{day}": f"Easy Office Mode {day.capitalize()}" for day in eom.WEEKDAYS},
+    "eom_start_time": "Easy Office Mode start time",
+    "eom_end_time": "Easy Office Mode end time",
+    "eom_start_date": "Easy Office Mode start date",
+    "eom_end_date": "Easy Office Mode end date",
+    "eom_remove": "Remove Easy Office Mode schedule",
+    "last_entry": "Last entry",
+    "last_incident": "Last incident",
+}
+
+
+def _entity_id_name(entity: SaltoKSEntity) -> str | None:
+    """The entity's own name (without the device name), in English."""
+    if key := getattr(entity, "_attr_translation_key", None):
+        return ENTITY_NAMES.get(key, humanize((key,)))
+    if type(entity).name is Entity.name:
+        return getattr(entity, "_attr_name", None)
+    return entity.name  # overridden by the entity class
+
+
+@callback
+def suggest_site_entity_ids(domain: str, entities: list[Entity]) -> None:
+    """Entity IDs of lock entities start with the site name, for example
+    lock.house_of_broeks_voordeur and event.house_of_broeks_voordeur_last_entry.
+
+    Only applies when an entity is registered for the first time; existing
+    entity IDs (and any the user changed) are kept.
+    """
+    for entity in entities:
+        if not isinstance(entity, SaltoKSEntity) or entity._lock_id is None:
+            continue
+        site_id, lock_id = entity._site_id or "", entity._lock_id
+        data = entity.coordinator.data
+        site = data.sites.get(site_id) if data else None
+        lock = data.locks.get(site_id, {}).get(lock_id) if data else None
+        parts = [site_name(site, site_id), lock_name(lock, lock_id), _entity_id_name(entity)]
+        entity.entity_id = f"{domain}.{slugify(' '.join(p for p in parts if p))}"
+
+
+def _site_entity_adder(
+    async_add_entities: Callable[[list[Entity]], None],
+) -> Callable[[list[Entity]], None]:
+    """Wrap async_add_entities so lock entities get site-based entity IDs.
+    Must be called during platform setup."""
+    domain = entity_platform.async_get_current_platform().domain
+
+    def _add(entities: list[Entity]) -> None:
+        suggest_site_entity_ids(domain, entities)
+        async_add_entities(entities)
+
+    return _add
+
+
 # --------------------------------------------------------- per-lock controls
 
 
@@ -311,6 +374,7 @@ def setup_per_lock_platform(
     async_add_entities: Callable[[list[Entity]], None],
 ) -> Callable[[], None]:
     """Create entities for every lock now and for locks that appear later."""
+    async_add_entities = _site_entity_adder(async_add_entities)
     known: set[tuple[str, str]] = set()
 
     def _discover() -> None:

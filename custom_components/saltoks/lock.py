@@ -16,7 +16,7 @@ from . import eom
 from .api import SaltoKSError
 from .const import STATE_LOCKED, STATE_OFFICE_MODE
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
-from .entity import SaltoKSEntity
+from .entity import SaltoKSEntity, suggest_site_entity_ids
 
 PARALLEL_UPDATES = 0
 
@@ -55,6 +55,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator = entry.runtime_data
     known: set[tuple[str, str]] = set()
+    domain = entity_platform.async_get_current_platform().domain
 
     @callback
     def _discover() -> None:
@@ -65,6 +66,7 @@ async def async_setup_entry(
                     known.add((site_id, lock_id))
                     new.append(SaltoKSLock(coordinator, site_id, lock_id))
         if new:
+            suggest_site_entity_ids(domain, new)
             async_add_entities(new)
 
     _discover()
