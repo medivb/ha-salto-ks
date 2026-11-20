@@ -150,7 +150,7 @@ The descriptions depend on what Salto KS reports and are added as they occur; th
 
 ## Details per account, site and lock
 
-- **Locks:** all information Salto KS provides about a lock (for example battery level, online status, floor and gateway details) is available as attributes of the lock entity. You see them under *Attributes* in the lock's dialog, and can use them in templates, for example `{{ state_attr('lock.house_of_broeks_voordeur', 'battery_level') }}`.
+- **Locks:** all information Salto KS provides about a lock (for example battery level, online status, floor and gateway details) is available as attributes of the lock entity. You see them under *Attributes* in the lock's dialog, and can use them in templates, for example `{{ state_attr('lock.my_site_my_lock', 'battery_level') }}`.
 - **Account and sites:** all other information is shown as entities in the *Diagnostic* section of the account and site devices. Pictures are shown as image entities.
 
 New information is added automatically when Salto KS starts providing it.
