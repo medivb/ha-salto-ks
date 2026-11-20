@@ -16,7 +16,7 @@ from . import eom
 from .api import SaltoKSError
 from .const import STATE_LOCKED, STATE_OFFICE_MODE
 from .coordinator import SaltoKSConfigEntry, SaltoKSCoordinator
-from .entity import SaltoKSEntity, suggest_site_entity_ids
+from .entity import SaltoKSEntity, is_superseded_field, suggest_site_entity_ids
 
 PARALLEL_UPDATES = 0
 
@@ -107,11 +107,15 @@ class SaltoKSLock(SaltoKSEntity, LockEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {
-            "site_id": self._site_id,
-            "lock_id": self._lock_id,
-            "locked_state": self.locked_state,
+        """All details Salto KS returns for the lock (nested objects such as
+        floor or iq stay nested). The Easy Office Mode schedule is left out:
+        it has its own controls."""
+        details = {
+            key: value
+            for key, value in (self.lock_data or {}).items()
+            if not is_superseded_field((key,))
         }
+        return {"site_id": self._site_id, "lock_id": self._lock_id, **details}
 
     async def _set_state(self, state: str) -> None:
         if state == STATE_LOCKED:

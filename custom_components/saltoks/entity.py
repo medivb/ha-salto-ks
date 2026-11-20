@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,7 +11,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import callback
-from homeassistant.helpers import entity_platform
+from homeassistant.helpers import entity_platform, entity_registry as er
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
@@ -19,6 +20,8 @@ from .const import DOMAIN, MANUFACTURER, MAX_FLATTEN_DEPTH
 from . import eom
 from .api import SaltoKSError
 from .coordinator import SaltoKSCoordinator, SaltoKSData
+
+_LOGGER = logging.getLogger(__name__)
 
 SCOPE_ME = "me"
 SCOPE_SITE = "site"
@@ -176,6 +179,32 @@ class SaltoKSEntity(CoordinatorEntity[SaltoKSCoordinator]):
             return False
         return self._lock_id is None or self.lock_data is not None
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._async_use_site_entity_id()
+
+    @callback
+    def _async_use_site_entity_id(self) -> None:
+        """Give every lock entity the site-based entity ID.
+
+        Home Assistant keeps the entity ID of existing entities, and restores
+        the previous ID when a deleted entity comes back. Any other ID is
+        renamed to "<site> <lock> <entity>" when the entity is added, as long
+        as that ID is not used by another entity.
+        """
+        if self._lock_id is None or self.registry_entry is None:
+            return
+        domain, object_id = self.entity_id.split(".", 1)
+        with_site = _lock_object_id(self)
+        if object_id == with_site:
+            return
+        new_entity_id = f"{domain}.{with_site}"
+        ent_reg = er.async_get(self.hass)
+        if ent_reg.async_is_registered(new_entity_id) or self.hass.states.get(new_entity_id):
+            return
+        _LOGGER.info("Renaming %s to %s (site name added)", self.entity_id, new_entity_id)
+        ent_reg.async_update_entity(self.entity_id, new_entity_id=new_entity_id)
+
 
 # --------------------------------------------------------------- metadata
 
@@ -245,11 +274,7 @@ def iter_metadata(data: SaltoKSData, account: str) -> Iterator[tuple[MetadataKey
     for site_id, site in data.sites.items():
         for path, value in flatten(site):
             yield MetadataKey(SCOPE_SITE, path, site_id), _kind(path, value)
-        for lock_id, lock in data.locks.get(site_id, {}).items():
-            for path, value in flatten(lock):
-                if is_superseded_field(path):
-                    continue
-                yield MetadataKey(SCOPE_LOCK, path, site_id, lock_id), _kind(path, value)
+    # Lock details are attributes of the lock entity, not separate entities.
 
 
 class SaltoKSMetadataEntity(SaltoKSEntity):
@@ -332,23 +357,28 @@ def _entity_id_name(entity: SaltoKSEntity) -> str | None:
     return entity.name  # overridden by the entity class
 
 
+def _lock_object_id(entity: SaltoKSEntity) -> str:
+    """Site-based object ID for a lock entity: "<site> <lock> <entity>"."""
+    site_id, lock_id = entity._site_id or "", entity._lock_id or ""
+    data = entity.coordinator.data
+    site = data.sites.get(site_id) if data else None
+    lock = data.locks.get(site_id, {}).get(lock_id) if data else None
+    parts = [site_name(site, site_id), lock_name(lock, lock_id), _entity_id_name(entity)]
+    return slugify(" ".join(p for p in parts if p))
+
+
 @callback
 def suggest_site_entity_ids(domain: str, entities: list[Entity]) -> None:
     """Entity IDs of lock entities start with the site name, for example
     lock.house_of_broeks_voordeur and event.house_of_broeks_voordeur_last_entry.
 
-    Only applies when an entity is registered for the first time; existing
-    entity IDs (and any the user changed) are kept.
+    This sets the ID for entities registered for the first time. Entities
+    that already have another ID are renamed when they are added (see
+    SaltoKSEntity._async_use_site_entity_id).
     """
     for entity in entities:
-        if not isinstance(entity, SaltoKSEntity) or entity._lock_id is None:
-            continue
-        site_id, lock_id = entity._site_id or "", entity._lock_id
-        data = entity.coordinator.data
-        site = data.sites.get(site_id) if data else None
-        lock = data.locks.get(site_id, {}).get(lock_id) if data else None
-        parts = [site_name(site, site_id), lock_name(lock, lock_id), _entity_id_name(entity)]
-        entity.entity_id = f"{domain}.{slugify(' '.join(p for p in parts if p))}"
+        if isinstance(entity, SaltoKSEntity) and entity._lock_id is not None:
+            entity.entity_id = f"{domain}.{_lock_object_id(entity)}"
 
 
 def _site_entity_adder(

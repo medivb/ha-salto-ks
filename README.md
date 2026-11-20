@@ -53,9 +53,9 @@ The integration creates:
 - one device per site, named after the site;
 - one device per lock, named after the lock and linked to its site.
 
-Each lock device holds the lock itself, its Easy Office Mode settings, its last entry and last incident, and the lock's details.
+Each lock device holds the lock itself, its Easy Office Mode settings, and its last entry and last incident. The lock's details are attributes of the lock entity.
 
-The entity IDs of a lock's entities start with the site name and the lock name, for example `lock.house_of_broeks_voordeur` and `event.house_of_broeks_voordeur_last_entry`. This applies when an entity is created; entity IDs that already exist, or that you changed yourself, are kept.
+The entity IDs of a lock's entities start with the site name and the lock name, for example `lock.house_of_broeks_voordeur` and `event.house_of_broeks_voordeur_last_entry`. Other entity IDs of lock entities, also ones you changed yourself or that Home Assistant restores when a removed lock comes back, are renamed to this form when the integration starts, unless that ID is already used by another entity.
 
 ## Locks
 
@@ -150,7 +150,10 @@ The descriptions depend on what Salto KS reports and are added as they occur; th
 
 ## Details per account, site and lock
 
-All other information Salto KS provides about your account, sites and locks is shown as entities in the *Diagnostic* section of each device. New information is added automatically when Salto KS starts providing it. Pictures are shown as image entities.
+- **Locks:** all information Salto KS provides about a lock (for example battery level, online status, floor and gateway details) is available as attributes of the lock entity. You see them under *Attributes* in the lock's dialog, and can use them in templates, for example `{{ state_attr('lock.house_of_broeks_voordeur', 'battery_level') }}`.
+- **Account and sites:** all other information is shown as entities in the *Diagnostic* section of the account and site devices. Pictures are shown as image entities.
+
+New information is added automatically when Salto KS starts providing it.
 
 Technical identifiers are disabled by default. To use one, open the entity settings and turn on *Enabled*.
 
